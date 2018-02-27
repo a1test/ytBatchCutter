@@ -1,0 +1,9 @@
+*.~*~
+test/*
+Win32/Debug/*
+*.stat
+*.dres
+*.identcache
+dcu/*
+*.local
+*.res
