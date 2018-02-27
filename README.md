@@ -4,4 +4,4 @@ Requires installed ffmpeg and youtube-dl.
 
 Compiled on Delphi 10.1. Uses Jedi Code Library.
 
-For more info read usage.txt
+For more info read usage.txt.
