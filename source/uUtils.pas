@@ -1,0 +1,1 @@
+C:/Users/Ilya/Work/Delphi Projects/Exchange connector/Components/uUtils.pas
