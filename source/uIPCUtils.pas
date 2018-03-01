@@ -238,7 +238,7 @@ end;
 
 destructor TProcessWaiter.Destroy;
 begin
-  // предотвращаем повторный вызов деструктора из ThreadProc
+  // Preventing repeated call of destructor from ThreadProc
   FreeOnTerminate := False;
 //  FReleasingEvent.SetEvent;
   inherited;
