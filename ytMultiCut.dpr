@@ -161,11 +161,23 @@ var
   FmtDotDecimalSeparator: TFormatSettings;
 
 function StrTimeLengthToTime(Str: string): TDateTime;
+
+  procedure Add00ToTime;
+  begin
+    Str := '00' + FormatSettings.TimeSeparator + Str;
+  end;
 begin
-  // X:XX writing must be changed to 0:XX:XX format to correctly converting
-  // because Delphi handles 00:00 format as HH:MM while ffmpeg handles it as MM:SS
-  if Str.CountChar(FormatSettings.TimeSeparator) = 1 then
-    Str := '0' + FormatSettings.TimeSeparator + Str;
+  // "XX" and "X:XX" writing must be changed to 00:XX:XX format to correctly converting.
+  // Delphi handles 00:00 format as HH:MM while ffmpeg handles it as MM:SS
+  case Str.CountChar(FormatSettings.TimeSeparator) of
+    1:
+      Add00ToTime;
+    0:
+      begin
+        Add00ToTime;
+        Add00ToTime;
+      end;
+  end;
 
   if not TryStrToTime(Str, Result)
     and not TryStrToTime(Str, Result, FmtDotDecimalSeparator) then
@@ -194,6 +206,21 @@ begin
   Result := CompareValue(D1, D2);
 end;
 
+function ConsistOf(const S: string; Chars: TSysCharSet): Boolean;
+var
+  C: Char;
+begin
+  for C in S do
+  begin
+    if not CharInSet(C, Chars) then
+      Exit(False);
+  end;
+
+  Exit(True);
+
+end;
+
+
 { TVideoFile }
 
 constructor TVideoFileInfo.Create;
@@ -214,16 +241,81 @@ begin
 end;
 
 procedure TVideoFileInfo.ParseTimes(Line: string);
-var
-  Words: TArray<string>;
-  Part: TVideoPart;
-begin
-  Words := Line.Split(['-']);
-  if Length(Words) < 2 then
+
+  procedure ShowError;
+  begin
     AskContinue('Unable to parse time of line "%s"', [Line]);
-  Part.InPoint := Words[0].Trim;
-  Part.OutPoint := Words[1].Trim;
-  FParts.Add(Part);
+  end;
+
+var
+  Words: IJclStringList;
+  Part: TVideoPart;
+  I: Integer;
+  S: string;
+  Word: string;
+  ParsedSeveralParts: Boolean;
+begin
+  Line := Line.Replace('-', '');
+
+  Words := JclStringList;
+  Words.DelimitedText := Line;
+  if Words.Count < 2 then
+    ShowError;
+
+  ParsedSeveralParts := False;
+  for I := 0 to Words.Count -1 do
+  begin
+    S := Words[I];
+    if ConsistOf(S, ['0' .. '9', ':']) then
+    begin
+      if not S.Contains(':') and (S.Length >= 3) then
+        S := S.Insert(S.Length - 2, ':');
+      if Part.InPoint.IsEmpty then
+        Part.InPoint := S
+      else
+        Part.OutPoint := S;
+      if I = Words.Count - 1 then
+      begin
+        if Part.OutPoint.IsEmpty then
+        begin
+          WritelnFmt('Skipped time "%s" of line "%s"', [Part.InPoint, Line]);
+          AskContinue;
+        end
+        else
+          FParts.Add(Part);
+
+
+      end;
+
+    end
+    else if not Part.InPoint.IsEmpty  then
+    begin
+      if not Part.OutPoint.IsEmpty  then
+      begin
+        FParts.Add(Part);
+        ParsedSeveralParts := True;
+      end
+      else
+      begin
+        WritelnFmt('Skipped time "%s" of line "%s"', [Part.InPoint, Line]);
+        AskContinue;
+      end;
+
+      Part.InPoint := '';
+      Part.OutPoint := '';
+
+    end
+  end;
+  if ParsedSeveralParts then
+  begin
+    for Part in FParts do
+    begin
+      Writeln(Part.InPoint + ' ' + Part.OutPoint);
+    end;
+
+  end;
+
+
 end;
 
 procedure TVideoFileInfo.SetUrl(const Value: string);
@@ -249,20 +341,6 @@ begin
   // Removing trailing params e.g. &t=999s
   FUrl := Value;
   FVideoID := GetPureUrl.Substring(I);
-end;
-
-function ConsistOf(const S: string; Chars: TSysCharSet): Boolean;
-var
-  C: Char;
-begin
-  for C in S do
-  begin
-    if not CharInSet(C, Chars) then
-      Exit(False);
-  end;
-
-  Exit(True);
-
 end;
 
 { TYoutubeMultiCutter }
@@ -449,6 +527,7 @@ var
     V: TVideoFileInfo;
     YoutubeDLProcess: TProcessCreator;
     DurationFile: TFilename;
+    DurationStr: string;
   begin
     YoutubeDLProcess := TProcessCreator.Create;
     try
@@ -469,7 +548,9 @@ var
 
         DurationFile := YoutubeDLProcess.CurrentDirectory + DURATION_FILENAME;
         try
-          V.Duration := StrTimeLengthToTime(TFile.ReadAllText(DurationFile).Trim);
+          DurationStr := TFile.ReadAllText(DurationFile).Trim;
+          Writeln(DurationStr);
+          V.Duration := StrTimeLengthToTime(DurationStr);
         except on E: Exception do
           if E is EAbort then
             raise
@@ -612,7 +693,7 @@ var
   Video: TVideoFileInfo;
   Line, S: string;
   PrevLineEmpty: Boolean;
-  I: Integer;
+  I, Dummy: Integer;
   DelCount: Integer;
 begin
   Writeln('Loading video list...');
@@ -637,14 +718,13 @@ begin
     PrevLineEmpty := False;
     if Line.StartsWith('#') then
       Continue;
-
     { TODO : handle local video files }
     if Line.StartsWith('http') then
       Video.Url := Line
-    else if ConsistOf(Line, ['0' .. '9', ':', '.', ' ', '-']) then
-      Video.ParseTimes(Line)
     else if S.StartsWith(LENGTH_PARAM) then
       Video.Duration := StrTimeLengthToTime(S.Substring(LENGTH_PARAM.Length))
+    else if TryStrToInt(Line.Split([' ', ':'])[0], Dummy) then
+      Video.ParseTimes(Line)
     else
       Video.FComment := Line;
 
