@@ -9,25 +9,40 @@ INPUTFILE format:
 
 	URL1
 	[Description]
-	[TimeFrom1 - TimeTo1]
-	[TimeFrom2 - TimeTo2]
-	[...]
+	[TIME PARTS]
 
 	[URL2]
 	...
 ```
 
-Time ranges defines parts that should be cut from original video and then merged. Merged videos are created in folder Concatenated that created in same folder as INPUTFILE located. 
+TIME PARTS format:
+```
+	[TimeFrom1 TimeTo1]
+	[TimeFrom2 TimeTo2]
+	[...]
+```
+OR:
+```
+	[TimeFrom1 TimeTo1 DELIMITER TimeFrom2 TimeTo2 ... etc]
+```
+
+DELIMITER is any character except numbers and colons.
+Time ranges defines parts that should be cut from original video and then merged.  
 Order of URL, Description and time ranges can be arbitrary, but different video sections must be separated by one or more empty lines.
-Each time range must be separated by character "-". It can be surrounded by spaces.
 Time values are passed as it is to ffmpeg as `-ss TimeFrom1` and `-t TimeFrom2` parameters and must be supported by ffmpeg.
+
+Videos are downloaded to folder '_downloaded'. Merged videos are created in folder `_concatenated`. Those folders are created in same folder as INPUTFILE located.
 INPUTFILE support # as comment line only at line start.
+
+Length of each video groups are determined before downloading and it is written to a INPUTFILE.
 
 Example of file:
 ```
 	https://www.youtube.com/watch?v=dQw4w9WgXcQ
-	0 - 0:10
-	1:12 - 3:40
+	0 0:10
+	1:12 3:40
+	3:45 3:50 , 4:00 4:03 , 4:10 4:55
+
 	Comment about video
 
 	0:16 - 1:07

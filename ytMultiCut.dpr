@@ -49,7 +49,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    procedure ParseTimes(Line: string);
+    procedure ParseTimes(var Line: string);
     property Url: string read FUrl write SetUrl;
     property PureUrl: string read GetPureUrl;
     property Comment: string read FComment write FComment;
@@ -99,7 +99,7 @@ type
     function GetDownloadsDir: string;
     function GetConcatVidsDir: string;
     procedure LoadVideoList(Lines: IJclStringList);
-    procedure ExtractConfigParams(Lines: IJclStringList);
+    procedure SetConfigParams(Lines: IJclStringList);
     function WarnIfEmptyParam(Param: TParamType): Boolean;
     procedure FindDownloadedFiles;
     procedure AskIgnoreErrors(Param: TParamType);
@@ -108,10 +108,9 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure DownloadVideos;
-    function GetAndWriteVideoDurations(InputFile: TFilename): Boolean;
-    procedure LoadInputFile(AFile: TFilename);
+    function GetAndWriteVideoDurations(InputData: IJclStringList): Boolean;
+    procedure LoadInputData(InputData: IJclStringList);
     function CutAndConcatVideos: TFilename;
-    function WriteDurationEnabled: Boolean;
     procedure ShowReadmeText;
     property DestinationDir: string read FDestinationDir
       write SetDestinationDir;
@@ -240,7 +239,7 @@ begin
   Result := FUrl.Split(['&'])[0];
 end;
 
-procedure TVideoFileInfo.ParseTimes(Line: string);
+procedure TVideoFileInfo.ParseTimes(var Line: string);
 
   procedure ShowError;
   begin
@@ -253,7 +252,7 @@ var
   I: Integer;
   S: string;
   Word: string;
-  ParsedSeveralParts: Boolean;
+  NewParts: TList<TVideoPart>;
 begin
   Line := Line.Replace('-', '');
 
@@ -262,57 +261,59 @@ begin
   if Words.Count < 2 then
     ShowError;
 
-  ParsedSeveralParts := False;
-  for I := 0 to Words.Count -1 do
-  begin
-    S := Words[I];
-    if ConsistOf(S, ['0' .. '9', ':']) then
+  NewParts := TList<TVideoPart>.Create;
+  try
+
+    for I := 0 to Words.Count -1 do
     begin
-      if not S.Contains(':') and (S.Length >= 3) then
-        S := S.Insert(S.Length - 2, ':');
-      if Part.InPoint.IsEmpty then
-        Part.InPoint := S
-      else
-        Part.OutPoint := S;
-      if I = Words.Count - 1 then
+      S := Words[I];
+      if ConsistOf(S, ['0' .. '9', ':']) then
       begin
-        if Part.OutPoint.IsEmpty then
+        if not S.Contains(':') and (S.Length >= 3) then
+          S := S.Insert(S.Length - 2, ':');
+        if Part.InPoint.IsEmpty then
+          Part.InPoint := S
+        else
+          Part.OutPoint := S;
+        if I = Words.Count - 1 then
+        begin
+          if Part.OutPoint.IsEmpty then
+          begin
+            WritelnFmt('Skipped time "%s" of line "%s"', [Part.InPoint, Line]);
+            AskContinue;
+          end
+          else
+            NewParts.Add(Part);
+        end;
+
+      end
+      else if not Part.InPoint.IsEmpty  then
+      begin
+        if not Part.OutPoint.IsEmpty  then
+        begin
+          NewParts.Add(Part);
+        end
+        else
         begin
           WritelnFmt('Skipped time "%s" of line "%s"', [Part.InPoint, Line]);
           AskContinue;
-        end
-        else
-          FParts.Add(Part);
+        end;
 
+        Part.InPoint := '';
+        Part.OutPoint := '';
 
-      end;
-
-    end
-    else if not Part.InPoint.IsEmpty  then
-    begin
-      if not Part.OutPoint.IsEmpty  then
-      begin
-        FParts.Add(Part);
-        ParsedSeveralParts := True;
       end
-      else
-      begin
-        WritelnFmt('Skipped time "%s" of line "%s"', [Part.InPoint, Line]);
-        AskContinue;
-      end;
-
-      Part.InPoint := '';
-      Part.OutPoint := '';
-
-    end
-  end;
-  if ParsedSeveralParts then
-  begin
-    for Part in FParts do
-    begin
-      Writeln(Part.InPoint + ' ' + Part.OutPoint);
     end;
+    if NewParts.Count > 1 then
+    begin
+      Line := '#' + Line;
+      for Part in NewParts do
+        Line := Line + sLineBreak + Part.InPoint + ' ' + Part.OutPoint;
+    end;
+    FParts.AddRange(NewParts);
 
+  finally
+    FreeAndNil(NewParts);
   end;
 
 
@@ -457,7 +458,7 @@ begin
 
 end;
 
-procedure TYtMultiCut.ExtractConfigParams(Lines: IJclStringList);
+procedure TYtMultiCut.SetConfigParams(Lines: IJclStringList);
 
   procedure SetParamAndDeleteLine(Param: TParamType);
   var
@@ -467,7 +468,6 @@ procedure TYtMultiCut.ExtractConfigParams(Lines: IJclStringList);
     if I >= 0 then
     begin
       FParams[Param] := Lines.ValueFromIndex[I];
-      Lines.Delete(I);
       if Param in DontDisplayParams then
         Exit;
 
@@ -497,7 +497,7 @@ end;
 
 function TYtMultiCut.GetDownloadsDir: string;
 begin
-  Result := PathAddSeparator(FDestinationDir + 'Downloads');
+  Result := PathAddSeparator(FDestinationDir + '_downloads');
 end;
 
 function TYtMultiCut.WarnIfEmptyParam(Param: TParamType): Boolean;
@@ -509,12 +509,8 @@ begin
 
 end;
 
-function TYtMultiCut.WriteDurationEnabled: Boolean;
-begin
-  Result := FParams[ptWriteDuration] = '1';
-end;
 
-function TYtMultiCut.GetAndWriteVideoDurations(InputFile: TFilename): Boolean;
+function TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList): Boolean;
 
 var
   TotalDuration: TDateTime;
@@ -585,12 +581,12 @@ var
   begin
     Format := TFormatSettings.Create;
 
-    Lines := JclStringList.LoadFromFile(InputFile);
+    Lines := InputData;
     for V in Vids do
     begin
       if V.Duration = 0 then
       begin
-        AskContinue('Something went wrong. Can''t determine video duration for "%s" (%s)',
+        AskContinue('Can''t determine video duration for "%s" (%s)',
           [V.Url, V.Comment]);
         Continue;
       end;
@@ -600,28 +596,20 @@ var
       begin
         Lines.Insert(I + 1, LENGTH_PARAM + TimeLengthToStr(V.Duration, Format));
         TotalDuration := TotalDuration + V.Duration;
-      end;
+      end
+      else
+        AskContinue('Writing video length failed: can''t find video with url "%s" ', [V.Url]);
 
     end;
 
     if Lines.IndexOfName(ParamNames[ptTotalDuration]) < 0 then
+    begin
+      if Lines.Last = '' then
+        Lines.Delete(Lines.Count - 1);
       Lines.Add('');
+    end;
     Lines.Values[ParamNames[ptTotalDuration]] := '    ' + TimeLengthToStr(TotalDuration, Format);
 
-    BkpFile := AddToFileName(InputFile, '.bkp');
-
-    if True or FileExists(BkpFile) then
-    begin
-      if Lines.Text.Trim <> TFile.ReadAllText(InputFile).Trim then
-        Lines.SaveToFile(InputFile)
-    end
-    else
-    begin
-      // needless
-//      NewFile := ExtractFilePath(InputFile) + MODIFIED_INPUTFILE;
-//      Lines.SaveToFile(NewFile);
-//      TFile.Replace(NewFile, InputFile, BkpFile);
-    end;
   end;
 
 var
@@ -667,31 +655,31 @@ end;
 
 function TYtMultiCut.GetConcatVidsDir: string;
 begin
-  Result := PathAddSeparator(FDestinationDir + 'Concatenated');
+  Result := PathAddSeparator(FDestinationDir + '_concatenated');
 end;
 
-procedure TYtMultiCut.LoadInputFile(AFile: TFilename);
-var
-  Lines: IJclStringList;
+procedure TYtMultiCut.LoadInputData(InputData: IJclStringList);
 begin
-  try
-    Lines := JclStringList.LoadFromFile(AFile);
-  except
-    on E: Exception do
-    begin
-      E.Message := Format('Failed to load video list file "%s": %s',
-        [AFile, E.Message]);
-      raise;
-    end;
-  end;
-  ExtractConfigParams(Lines);
-  LoadVideoList(Lines);
+  SetConfigParams(InputData);
+  LoadVideoList(InputData);
+
 end;
 
 procedure TYtMultiCut.LoadVideoList(Lines: IJclStringList);
+
+  function IsParam(Line: string): Boolean;
+  var
+    Param: TParamType;
+  begin
+    for Param := Low(TParamType) to High(TParamType) do
+      if Line.StartsWith(ParamNames[Param]) then
+        Exit(True);
+    Exit(False);
+  end;
+
 var
   Video: TVideoFileInfo;
-  Line, S: string;
+  Line: string;
   PrevLineEmpty: Boolean;
   I, Dummy: Integer;
   DelCount: Integer;
@@ -700,14 +688,18 @@ begin
 
   PrevLineEmpty := True;
   Video := nil;
-  for S in Lines do
+  for I := 0 to Lines.Count - 1 do
   begin
-    Line := S.Trim;
+    Line := Lines[I].Trim;
     if Line.IsEmpty then
     begin
       PrevLineEmpty := True;
       Continue;
     end;
+
+    if IsParam(Line) then
+      Continue;
+
 
     if PrevLineEmpty then
     begin
@@ -718,13 +710,20 @@ begin
     PrevLineEmpty := False;
     if Line.StartsWith('#') then
       Continue;
-    { TODO : handle local video files }
     if Line.StartsWith('http') then
-      Video.Url := Line
-    else if S.StartsWith(LENGTH_PARAM) then
-      Video.Duration := StrTimeLengthToTime(S.Substring(LENGTH_PARAM.Length))
+    begin
+      Video.Url := Line;
+      Lines[I] := Line;
+    end
+    else if Line.Contains(':\') and TFile.Exists(Line) then
+      Video.OriginalFile := Line
+    else if Lines[I].StartsWith(LENGTH_PARAM) then
+      Video.Duration := StrTimeLengthToTime(Lines[I].Substring(LENGTH_PARAM.Length))
     else if TryStrToInt(Line.Split([' ', ':'])[0], Dummy) then
-      Video.ParseTimes(Line)
+    begin
+      Video.ParseTimes(Line);
+      Lines[I] := Line;
+    end
     else
       Video.FComment := Line;
 
@@ -734,7 +733,7 @@ begin
   for I := FVideos.Count - 1 downto 0 do
   begin
     Video := FVideos[I];
-    if Video.Url.IsEmpty then
+    if (Video.Url + Video.OriginalFile).IsEmpty then
     begin
       if not Video.Comment.IsEmpty then
         WritelnFmt('Text "%s" is not associated with any URL', [Video.Comment]);
@@ -923,6 +922,7 @@ end;
 var
   Cutter: TYtMultiCut;
   InputFile: TFilename;
+  InputLines: IJclStringList;
 begin
   FmtDotDecimalSeparator := TFormatSettings.Create;
   FmtDotDecimalSeparator.DecimalSeparator := '.';
@@ -938,12 +938,26 @@ begin
         Abort;
       end;
       InputFile := ExpandFileName(ParamStr(1));
-      Cutter.LoadInputFile(InputFile);
+
+      try
+        InputLines := JclStringList.LoadFromFile(InputFile);
+      except
+        on E: Exception do
+        begin
+          E.Message := Format('Failed to load video list file "%s": %s',
+            [InputFile, E.Message]);
+          raise;
+        end;
+      end;
+
+
+      Cutter.LoadInputData(InputLines);
       Cutter.DestinationDir := ExtractFilePath(InputFile);
 
-      Cutter.GetAndWriteVideoDurations(InputFile);
-      if Cutter.WriteDurationEnabled  then
-        Exit;
+      Cutter.GetAndWriteVideoDurations(InputLines);
+
+      if InputLines.Text.Trim <> TFile.ReadAllText(InputFile).Trim then
+        InputLines.SaveToFile(InputFile);
 
       if not AskConfirmation('Skip downloading?') then
         Cutter.DownloadVideos;
