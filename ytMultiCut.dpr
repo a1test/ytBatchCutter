@@ -267,7 +267,7 @@ begin
     for I := 0 to Words.Count -1 do
     begin
       S := Words[I];
-      if ConsistOf(S, ['0' .. '9', ':']) then
+      if ConsistOf(S, ['0' .. '9', ':', '.']) then
       begin
         if not S.Contains(':') and (S.Length >= 3) then
           S := S.Insert(S.Length - 2, ':');
@@ -353,7 +353,7 @@ begin
   if FIgnoreErrors[Param] then
     Exit;
 
-  Writeln('Ignore such errors? [y/n/a] Type "a" for ignore all errors');
+  Writeln('Ignore such errors? [y/n/a] Type "a" for ignore all ffmpeg or youtube-dl errors');
   case ReadChar(['y', 'n', 'a']) of
     'y':
       FIgnoreErrors[Param] := True;
@@ -719,7 +719,7 @@ begin
       Video.OriginalFile := Line
     else if Lines[I].StartsWith(LENGTH_PARAM) then
       Video.Duration := StrTimeLengthToTime(Lines[I].Substring(LENGTH_PARAM.Length))
-    else if TryStrToInt(Line.Split([' ', ':'])[0], Dummy) then
+    else if TryStrToInt(Line.Split([' ', ':', '.'])[0], Dummy) then
     begin
       Video.ParseTimes(Line);
       Lines[I] := Line;
@@ -964,8 +964,8 @@ begin
       Cutter.FindDownloadedFiles;
       Cutter.CutAndConcatVideos;
 
-      if Cutter.HasErrors then
-        WaitForEnterKeyForExit;
+      //if Cutter.HasErrors then
+        //WaitForEnterKeyForExit;
 
     finally
       FreeAndNil(Cutter);
