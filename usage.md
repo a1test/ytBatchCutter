@@ -46,7 +46,7 @@ Example of file:
 	3:45 3:50 , 4:00 4:03 , 4:10 4:55
 	Comment about video
 
-	0:16 - 1:07
+	0:16 1:07
 	https://www.youtube.com/watch?v=FPRCppkU6XU
 ```
 Config section format:
