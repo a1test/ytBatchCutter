@@ -6,7 +6,7 @@
 {$R *.dres}
 
 uses
-  uYtMulticut in 'uYtMulticut.pas';
+  uYtMulticut in 'source\uYtMulticut.pas';
 
 begin
   Run;
