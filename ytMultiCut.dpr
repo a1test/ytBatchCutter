@@ -251,7 +251,6 @@ var
   Part: TVideoPart;
   I: Integer;
   S: string;
-  Word: string;
   NewParts: TList<TVideoPart>;
 begin
   Line := Line.Replace('-', '');
@@ -578,6 +577,7 @@ var
     I: Integer;
     Format: TFormatSettings;
     BkpFile: TFileName;
+    DurationStr: string;
   begin
     Format := TFormatSettings.Create;
 
@@ -594,8 +594,17 @@ var
       I := Lines.IndexOf(V.Url);
       if I >= 0 then
       begin
-        Lines.Insert(I + 1, LENGTH_PARAM + TimeLengthToStr(V.Duration, Format));
         TotalDuration := TotalDuration + V.Duration;
+        DurationStr := LENGTH_PARAM + TimeLengthToStr(V.Duration, Format);
+        if I = Lines.Count - 1 then
+          Lines.Add(DurationStr)
+        else
+        begin
+          if Lines[I + 1].StartsWith(LENGTH_PARAM) then
+            Lines[I + 1] := DurationStr
+          else
+            Lines.Insert(I + 1, DurationStr);
+        end;
       end
       else
         AskContinue('Writing video length failed: can''t find video with url "%s" ', [V.Url]);
@@ -626,9 +635,10 @@ begin
     begin
       V := FVideos[I];
       TotalDuration := TotalDuration + V.Duration;
-      if V.Duration = 0 then
+      if (V.Duration = 0) or (V.Parts.Count > 0) then
         Vids.Add(V);
 
+      V.Duration := 0;
       for Part in V.Parts do
       begin
         V.Duration := V.Duration + StrTimeLengthToTime(Part.OutPoint)
@@ -718,7 +728,9 @@ begin
     else if Line.Contains(':\') and TFile.Exists(Line) then
       Video.OriginalFile := Line
     else if Lines[I].StartsWith(LENGTH_PARAM) then
+    begin
       Video.Duration := StrTimeLengthToTime(Lines[I].Substring(LENGTH_PARAM.Length))
+    end
     else if TryStrToInt(Line.Split([' ', ':', '.'])[0], Dummy) then
     begin
       Video.ParseTimes(Line);
