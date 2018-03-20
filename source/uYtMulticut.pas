@@ -516,9 +516,6 @@ end;
 
 function TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList): Boolean;
 
-var
-  TotalDuration: TDateTime;
-  Vids: TObjectList<TVideoFileInfo>;
 
   procedure GetDurations;
   const
@@ -533,7 +530,7 @@ var
     try
       YoutubeDLProcess.AdjustCmdLine := False;
       YoutubeDLProcess.CurrentDirectory := FDestinationDir;
-      for V in Vids do
+      for V in FVideos do
       begin
         if V.Duration > 0  then
           Continue;
@@ -583,11 +580,12 @@ var
     Format: TFormatSettings;
     BkpFile: TFileName;
     DurationStr: string;
+    TotalDuration: TDateTime;
   begin
     Format := TFormatSettings.Create;
-
+    TotalDuration := 0;
     Lines := InputData;
-    for V in Vids do
+    for V in FVideos do
     begin
       if V.Duration = 0 then
       begin
@@ -596,10 +594,11 @@ var
         Continue;
       end;
 
+      TotalDuration := TotalDuration + V.Duration;
+
       I := Lines.IndexOf(V.Url);
       if I >= 0 then
       begin
-        TotalDuration := TotalDuration + V.Duration;
         DurationStr := LENGTH_PARAM + TimeLengthToStr(V.Duration, Format);
         if I = Lines.Count - 1 then
           Lines.Add(DurationStr)
@@ -618,6 +617,7 @@ var
 
     if Lines.IndexOfName(ParamNames[ptTotalDuration]) < 0 then
     begin
+
       if Lines.Last = '' then
         Lines.Delete(Lines.Count - 1);
       Lines.Add('');
@@ -631,32 +631,25 @@ var
   Part: TVideoPart;
   V: TVideoFileInfo;
 begin
-  TotalDuration := 0;
 
-  Vids := TObjectList<TVideoFileInfo>.Create(False);
   try
 
     for I := FVideos.Count - 1 downto 0 do
     begin
       V := FVideos[I];
-      TotalDuration := TotalDuration + V.Duration;
-      if (V.Duration = 0) or (V.Parts.Count > 0) then
-        Vids.Add(V);
-
-      V.Duration := 0;
-      for Part in V.Parts do
+      if (V.Parts.Count > 0) then
       begin
-        V.Duration := V.Duration + StrTimeLengthToTime(Part.OutPoint)
-          - StrTimeLengthToTime(Part.InPoint);
+        V.Duration := 0;
+        for Part in V.Parts do
+          V.Duration := V.Duration + StrTimeLengthToTime(Part.OutPoint)
+            - StrTimeLengthToTime(Part.InPoint);
       end;
 
     end;
 
-    Result := Vids.Count > 0;
-
     Write(ParamActions[ptWriteDuration]);
     if Result then
-      Write(Format(' for %d video(s)', [Vids.Count]));
+      Write(Format(' for %d video(s)', [FVideos.Count]));
     Writeln;
 
     GetDurations;
