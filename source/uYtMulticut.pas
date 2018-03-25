@@ -256,6 +256,7 @@ var
   Part: TVideoPart;
   I: Integer;
   S: string;
+  Index: Integer;
   NewParts: TList<TVideoPart>;
 begin
   Line := Line.Replace('-', '');
@@ -274,7 +275,12 @@ begin
       if ConsistOf(S, ['0' .. '9', ':', '.']) then
       begin
         if not S.Contains(':') and (S.Length >= 3) then
-          S := S.Insert(S.Length - 2, ':');
+        begin
+          Index := S.IndexOf('.');
+          if Index = -1 then
+            Index := S.Length;
+          S := S.Insert(Index - 2, ':')
+        end;
         if Part.InPoint.IsEmpty then
           Part.InPoint := S
         else
