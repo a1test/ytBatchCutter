@@ -260,9 +260,17 @@ var
   NewParts: TList<TVideoPart>;
 begin
   Line := Line.Replace('-', '');
-
   Words := JclStringList;
-  Words.DelimitedText := Line;
+
+  I := Line.IndexOf('#');
+  if I < 0 then
+    I := Line.Length;
+  Words.DelimitedText := Line.Substring(0, I);
+
+  I := Words.DelimitedText.IndexOf('#');
+  if I >= 0 then
+    Words.DelimitedText := Words.DelimitedText.Substring(0, I);
+
   if Words.Count < 2 then
     ShowError;
 
@@ -279,7 +287,11 @@ begin
           Index := S.IndexOf('.');
           if Index = -1 then
             Index := S.Length;
-          S := S.Insert(Index - 2, ':')
+          S := S.Insert(Index - 2, ':');
+          if Index in [5 .. 6] then
+            S := S.Insert(Index - 4, ':')
+          else if Index > 6 then
+            ShowError;
         end;
         if Part.InPoint.IsEmpty then
           Part.InPoint := S
@@ -640,7 +652,7 @@ begin
 
   try
 
-    for I := FVideos.Count - 1 downto 0 do
+    for I := 0 to FVideos.Count - 1 do
     begin
       V := FVideos[I];
       if (V.Parts.Count > 0) then
