@@ -6,7 +6,8 @@ uses
   System.SysUtils,
   Classes,
   System.Generics.Collections,
-  JclStringLists;
+  JclStringLists,
+  uIPCUtils;
 
 procedure Run;
 
@@ -44,8 +45,8 @@ type
   end;
 
 type
-  TParamType = (ptConcatAll, ptYoutubeDL, ptFFMpegCut, ptFFMpegConcat,
-    ptFFMpegReEncoding, ptWriteDuration, ptTotalDuration);
+  TParamType = (ptConcatAll, ptYoutubeDL, ptYoutubeDLDownload, ptFFMpeg, ptFFMpegCut, ptFFMpegConcat,
+    ptFFMpegReEncoding, ptYoutubeDLGetDuration, ptTotalDuration);
   TParamStrArray = array [TParamType] of string;
 
 var
@@ -64,11 +65,11 @@ type
     LENGTH_PARAM = '        length = ';
     VIDEO_EXT = '.mp4';
 
-    ParamNames: array [TParamType] of string = ('concat-all', YoutubeDL,
-      FFMpeg + '-cut', FFMpeg + '-concat', FFMpeg + '-reencoding',
-      'write-length', 'total-length');
+    ParamNames: array [TParamType] of string = ('concat-all', YoutubeDL, YoutubeDL + '-download', FFMpeg,
+      FFMpeg + '-cut', FFMpeg + '-concat', FFMpeg + '-reencode',
+      'get-length', 'total-length');
     ParamActions: array [TParamType] of string = ('Concatenating all videos' ,
-      'Downloading', 'Cutting', 'Parts concatenating', 'Re-encoding',
+      'Youtube-DL', 'Downloading', 'FFMpeg', 'Cutting', 'Parts concatenating', 'Re-encoding',
       'Getting durations', 'Total duration');
     DontDisplayParams: set of TParamType = [ptTotalDuration];
 
@@ -82,11 +83,13 @@ type
     function GetDownloadsDir: string;
     function GetConcatVidsDir: string;
     procedure LoadVideoList(Lines: IJclStringList);
-    procedure SetConfigParams(Lines: IJclStringList);
+    procedure ReadConfigParams(Lines: IJclStringList);
     function WarnIfEmptyParam(Param: TParamType): Boolean;
     procedure FindDownloadedFiles;
     procedure AskIgnoreErrors(Param: TParamType);
-    procedure CheckError(ErrorCode: Integer; Action: TParamType);
+    procedure ExecuteAndWait(ProcessCreator: TProcessCreator; Action: TParamType);
+    function ParamVarTemplate(Param: TParamType): string;
+
   public
     constructor Create;
     destructor Destroy; override;
@@ -106,7 +109,6 @@ implementation
 uses
   IOUtils,
   Windows,
-  uIPCUtils,
   ShellApi,
   ActiveX,
   Types,
@@ -385,16 +387,18 @@ begin
   end;
 end;
 
-procedure TYtMultiCut.CheckError(ErrorCode: Integer;
+procedure TYtMultiCut.ExecuteAndWait(ProcessCreator: TProcessCreator;
   Action: TParamType);
 begin
-  if ErrorCode = 0 then
+  Writeln(ProcessCreator.Parameters);
+  ProcessCreator.Execute;
+  if ProcessCreator.WaitFor = 0 then
     Exit;
 
   FHasErrors := True;
 
   case Action of
-    ptFFMpegCut, ptFFMpegConcat, ptFFMpegReEncoding, ptWriteDuration:
+    ptFFMpegCut, ptFFMpegConcat, ptFFMpegReEncoding, ptYoutubeDLGetDuration:
       AskIgnoreErrors(Action);
     ptYoutubeDL:
       AskContinue;
@@ -409,11 +413,14 @@ constructor TYtMultiCut.Create;
 begin
   inherited Create;
   FVideos := TObjectList<TVideoFileInfo>.Create;
-  FParams[ptYoutubeDL] := YoutubeDLExe + ' -f best';
-  FParams[ptFFMpegCut] := FFMpegExe + ' -i "%s" -ss %s -to %s -n part%d' + VIDEO_EXT;
-  FParams[ptFFMpegConcat] := FFMpegExe + ' -f concat -safe 0 -i ' +
+  FParams[ptYoutubeDL] := YoutubeDLExe;
+  FParams[ptYoutubeDLDownload] := ParamVarTemplate(ptYoutubeDL) + ' -f best';
+  FParams[ptYoutubeDLGetDuration] := 'cmd /c ' + ParamVarTemplate(ptYoutubeDL) + ' %s --get-duration > %s';
+  FParams[ptFFMpeg] := FFmpegExe + ' -hide_banner -loglevel info';
+  FParams[ptFFMpegCut] := ParamVarTemplate(ptFFMpeg) + ' -i "%s" -ss %s -to %s -n part%d' + VIDEO_EXT;
+  FParams[ptFFMpegConcat] := ParamVarTemplate(ptFFMpeg) + '  -f concat -safe 0 -i ' +
     CONCAT_DEMUXER_FILE + ' -c copy "%s" -n';
-  FParams[ptFFMpegReEncoding] := FFMpegExe + ' -i "%s" "%s" -n';
+  FParams[ptFFMpegReEncoding] := ParamVarTemplate(ptFFMpeg) + ' -i "%s" "%s" -n';
 
 end;
 
@@ -429,6 +436,7 @@ var
   Files: IJclStringList;
   S: string;
 begin
+  Writeln('Finding downloaded files...');
   for V in FVideos do
   begin
     Files := TJclStringList.Create.Files(GetDownloadsDir + '*-' +
@@ -470,19 +478,16 @@ begin
     TDirectory.CreateDirectory(GetDownloadsDir);
     YoutubeDLProcess.CurrentDirectory := GetDownloadsDir;
     // YoutubeDLProcess.CreationFlags := CREATE_NEW_CONSOLE;
-    Writeln('Creating process: ' + YoutubeDLProcess.ApplicationName + ' ' +
-      YoutubeDLProcess.Parameters);
-    YoutubeDLProcess.Execute;
-    CheckError(YoutubeDLProcess.WaitFor, ptYoutubeDL);
+    ExecuteAndWait(YoutubeDLProcess, ptYoutubeDL);
   finally
     FreeAndNil(YoutubeDLProcess);
   end;
 
 end;
 
-procedure TYtMultiCut.SetConfigParams(Lines: IJclStringList);
+procedure TYtMultiCut.ReadConfigParams(Lines: IJclStringList);
 
-  procedure SetParamAndDeleteLine(Param: TParamType);
+  procedure SetParam(Param: TParamType);
   var
     I: Integer;
   begin
@@ -500,21 +505,24 @@ procedure TYtMultiCut.SetConfigParams(Lines: IJclStringList);
       if Param in DontDisplayParams then
         Exit;
 
-      Writeln(ParamNames[Param] + ' is not specified. Using default value:');
-      if FParams[Param].IsEmpty then
-        Writeln('[empty]')
-      else
-        Writeln(FParams[Param]);
-      Writeln('');
+      Writeln(ParamNames[Param] + '=[DEFAULT VALUE]=' + IfThen(FParams[Param].IsEmpty, '[EMPTY]', FParams[Param]));
     end;
 
   end;
 
 var
-  Param: TParamType;
+  P, P2: TParamType;
 begin
-  for Param := Low(TParamType) to High(TParamType) do
-    SetParamAndDeleteLine(Param);
+  Writeln('Reading config params...');
+  for P := Low(TParamType) to High(TParamType) do
+    SetParam(P);
+
+  { TODO : check replacing order }
+  for P := Low(TParamType) to High(TParamType) do
+    for P2 := Low(TParamType) to High(TParamType) do
+      if FParams[P].Contains(ParamVarTemplate(P2)) then
+        FParams[P] := FParams[P].Replace(ParamVarTemplate(P2), FParams[P2]);
+
 end;
 
 function TYtMultiCut.GetDownloadsDir: string;
@@ -553,13 +561,10 @@ function TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList): Boole
         if V.Duration > 0  then
           Continue;
 
-        YoutubeDLProcess.Parameters := 'cmd /c ' + YoutubeDL + ' ' + V.PureUrl
-          + ' --get-duration > ' + DURATION_FILENAME;
+        YoutubeDLProcess.Parameters := Format(FParams[ptYoutubeDLGetDuration],
+           [V.PureUrl, DURATION_FILENAME]);
 
-        Writeln('Creating process: ' + YoutubeDLProcess.ApplicationName + ' ' +
-          YoutubeDLProcess.Parameters);
-        YoutubeDLProcess.Execute;
-        CheckError(YoutubeDLProcess.WaitFor, ptWriteDuration);
+        ExecuteAndWait(YoutubeDLProcess, ptYoutubeDLGetDuration);
 
         DurationFile := YoutubeDLProcess.CurrentDirectory + DURATION_FILENAME;
         try
@@ -641,6 +646,8 @@ function TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList): Boole
       Lines.Add('');
     end;
     Lines.Values[ParamNames[ptTotalDuration]] := '    ' + TimeLengthToStr(TotalDuration, Format);
+    Writeln('Total duration = ' + TimeLengthToStr(TotalDuration, Format));
+
 
   end;
 
@@ -648,6 +655,7 @@ var
   I: Integer;
   Part: TVideoPart;
   V: TVideoFileInfo;
+  PartDuration: TDateTime;
 begin
 
   try
@@ -659,13 +667,18 @@ begin
       begin
         V.Duration := 0;
         for Part in V.Parts do
-          V.Duration := V.Duration + StrTimeLengthToTime(Part.OutPoint)
-            - StrTimeLengthToTime(Part.InPoint);
+        begin
+          PartDuration := StrTimeLengthToTime(Part.OutPoint) - StrTimeLengthToTime(Part.InPoint);
+          if PartDuration < 0 then
+            AskContinue('Inpoint "%s" > oupoint "%s" for video "%s"', [Part.InPoint, Part.OutPoint, V.VideoID]);
+
+          V.Duration := V.Duration + PartDuration;
+        end;
       end;
 
     end;
 
-    Write(ParamActions[ptWriteDuration]);
+    Write(ParamActions[ptYoutubeDLGetDuration]);
     if Result then
       Write(Format(' for %d video(s)', [FVideos.Count]));
     Writeln;
@@ -675,7 +688,6 @@ begin
   finally
 
   end;
-  Writeln('Done');
 
 end;
 
@@ -686,7 +698,7 @@ end;
 
 procedure TYtMultiCut.LoadInputData(InputData: IJclStringList);
 begin
-  SetConfigParams(InputData);
+  ReadConfigParams(InputData);
   LoadVideoList(InputData);
 
 end;
@@ -757,6 +769,11 @@ begin
 
   end;
 
+  WritelnFmt('Loaded %d videos', [FVideos.Count]);
+  if FVideos.Count = 1  then
+    WritelnFmt('Parts count = %d', [FVideos[0].Parts.Count]);
+
+
   DelCount := 0;
   for I := FVideos.Count - 1 downto 0 do
   begin
@@ -771,10 +788,14 @@ begin
     end;
   end;
 
-  Writeln('Loaded videos from file: ' + FVideos.Count.ToString);
   if DelCount > 0 then
     AskContinue('Found %d unrelated texts', [DelCount]);
 
+end;
+
+function TYtMultiCut.ParamVarTemplate(Param: TParamType): string;
+begin
+  Result := '%' + ParamNames[Param] + '%';
 end;
 
 function TYtMultiCut.CutAndConcatVideos: TFilename;
@@ -809,12 +830,15 @@ var
       I := 1;
       for T in V.Parts do
       begin
-        if FParams[ptFFMpegCut] <> '' then
+        { TODO : remove "part" hardcode }
+        if FileExists(WorkDir + 'part' + I.ToString + '.mp4') then
+          WritelnFmt('Part %d is already exists', [I])
+        else if FParams[ptFFMpegCut] <> '' then
         begin
+          //WritelnFmt('%s part %d of %d', [ParamActions[ptFFMpegCut], I, V.Parts.Count]);
           FFMpeg.Parameters := Format(FParams[ptFFMpegCut],
             [V.OriginalFile, T.InPoint, T.OutPoint, I]);
-          FFMpeg.Execute;
-          CheckError(FFMpeg.WaitFor, ptFFMpegCut);
+          ExecuteAndWait(FFMpeg, ptFFMpegCut);
         end;
         PartsDemuxer.GetStringsRef.AddFmt('file part%d' + VIDEO_EXT, [I]);
         Inc(I);
@@ -827,8 +851,7 @@ var
       if FParams[ptFFMpegConcat] <> '' then
       begin
         FFMpeg.Parameters := Format(FParams[ptFFMpegConcat], [V.ModifiedFile]);
-        FFMpeg.Execute;
-        CheckError(FFMpeg.WaitFor, ptFFMpegConcat);
+        ExecuteAndWait(FFMpeg, ptFFMpegConcat);
       end;
 
     end
@@ -841,13 +864,12 @@ var
       else
       begin
         // reencoding is needed to properly concatenate this video with other cutted videos
-        WritelnFmt('%s "%s"', [ParamActions[ptFFMpegReEncoding],
-          ExtractFileName(V.OriginalFile)]);
+        //WritelnFmt('%s "%s"', [ParamActions[ptFFMpegReEncoding],
+          // ExtractFileName(V.OriginalFile)]);
         FFMpeg.CurrentDirectory := FDestinationDir;
         FFMpeg.Parameters := Format(FParams[ptFFMpegReEncoding],
           [V.OriginalFile, V.ModifiedFile]);
-        FFMpeg.Execute;
-        CheckError(FFMpeg.WaitFor, ptFFMpegReEncoding);
+        ExecuteAndWait(FFMpeg, ptFFMpegReEncoding);
       end;
     end;
 
@@ -863,10 +885,12 @@ var
     FinalVideo := '..\' + FParams[ptConcatAll];
     if not ExtractFileExt(FinalVideo).EndsWith(VIDEO_EXT, True) then
       FinalVideo := FinalVideo + VIDEO_EXT;
+    if TFile.Exists(FinalVideo) then
+      TFile.Delete(FinalVideo);
+
     FFMpeg.Parameters := Format(FParams[ptFFMpegConcat], [FinalVideo]);
     FFMpeg.CurrentDirectory := GetConcatVidsDir;
-    FFMpeg.Execute;
-    CheckError(FFMpeg.WaitFor, ptConcatAll);
+    ExecuteAndWait(FFMpeg, ptConcatAll);
     TFile.Delete(GetConcatVidsDir + CONCAT_DEMUXER_FILE);
   end;
 
@@ -874,6 +898,7 @@ var
   V: TVideoFileInfo;
   HasCutting: Boolean;
   DownloadsDirName: string;
+  I: Integer;
 begin
   Writeln('');
   Writeln('Start cutting and concatenating');
@@ -895,13 +920,20 @@ begin
     FFMpeg.ApplicationName := '';
     FFMpeg.AdjustCmdLine := False;
 
+    I := 0;
     for V in FVideos do
+    begin
+      Inc(I);
       if HasCutting then
+      begin
+        WritelnFmt('Processing %d of %d video: "%s"', [I, FVideos.Count, V.OriginalFile]);
         CutAndConcat(V)
+      end
       else
         NewFilesDemuxer.Add('file '
           + QuotedStr(DownloadsDirName.QuotedString + PathDelim + ExtractFileName(V.OriginalFile))
         );
+    end;
 
     if not FParams[ptConcatAll].IsEmpty then
       ConcatAllVideos;
