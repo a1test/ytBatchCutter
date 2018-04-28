@@ -304,7 +304,6 @@ const
   ENVIRONMENT = nil;
   ERROR_ELEVATION_REQUIRED = 740;
 var
-  QuotedAppName: string;
   Params: string;
 begin
   Params := FParameters;

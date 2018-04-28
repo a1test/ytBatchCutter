@@ -140,7 +140,6 @@ uses
 
 function SleepUntil(Milliseconds: Integer; Check: TCheckRef): Boolean;
 var
-  I: Integer;
   Stopwatch: TStopwatch;
 begin
   Stopwatch := TStopwatch.StartNew;
