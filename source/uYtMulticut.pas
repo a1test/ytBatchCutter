@@ -58,8 +58,8 @@ type
   end;
 
 type
-  TParamType = (ptConcatAll, ptYoutubeDL, ptYoutubeDLDownload, ptFFMpeg, ptFFMpegCut, ptFFMpegConcat,
-    ptFFMpegFilterComplex, ptFFMpegReEncoding, ptYoutubeDLGetDuration, ptTotalDuration,
+  TParamType = (ptConcatAll, ptYoutubeDL, ptYoutubeDLDownload, ptFFMpeg, ptFFMpegConcat,
+    ptFFMpegFilterComplex, ptYoutubeDLGetDuration, ptTotalDuration,
     ptUseConcatDemuxer, ptVideoFormat);
   TParamStrArray = array [TParamType] of string;
 
@@ -83,10 +83,10 @@ type
     DEFAULT_USE_CONCAT_DEMUXER = False;
 
     ParamNames: array [TParamType] of string = ('concat-all', YoutubeDL, YoutubeDL + '-download', FFMpeg,
-      FFMpeg + '-cut', FFMpeg + '-concat', FFMpeg + '-filter-complex', FFMpeg + '-reencode',
+    FFMpeg + '-concat', FFMpeg + '-filter-complex',
       'get-length', 'total-length', 'use-concat-demuxer', 'video-format');
     ParamActions: array [TParamType] of string = ('Concatenating all videos' ,
-      'Youtube-DL', 'Downloading', 'FFMpeg', 'Cutting', 'Parts concatenating', 'Filtering', 'Re-encoding',
+      'Youtube-DL', 'Downloading', 'FFMpeg', 'Concatenating', 'Trimming',
       'Getting durations', 'Total duration', 'Use concat demuxer', 'Video format');
     OutputParams: set of TParamType = [ptTotalDuration];
 
@@ -440,7 +440,7 @@ begin
   FHasErrors := True;
 
   case Action of
-    ptFFMpegCut, ptFFMpegConcat, ptFFMpegReEncoding, ptYoutubeDLGetDuration:
+    ptYoutubeDLGetDuration:
       AskIgnoreErrors(Action);
     ptYoutubeDLDownload:
       AskContinue;
@@ -461,14 +461,9 @@ begin
   FParams[ptYoutubeDLDownload] := ParamVarTemplate(ptYoutubeDL) + ' -f best';
   FParams[ptYoutubeDLGetDuration] := 'cmd /c ' + ParamVarTemplate(ptYoutubeDL) + ' %s --get-duration > %s';
   FParams[ptFFMpeg] := FFmpegExe + ' -hide_banner -loglevel info';
-  FParams[ptFFMpegCut] := ParamVarTemplate(ptFFMpeg) + ' -i "%s" -ss %s -to %s -y '
-     + VIDEO_TEMP_PART_FILENAME + '.' + ParamVarTemplate(ptVideoFormat);
-  FParams[ptFFMpegConcat] := ParamVarTemplate(ptFFMpeg) + '  -f concat -safe 0 -i ' +
-    CONCAT_DEMUXER_FILE + ' -c copy "%s" -n';
-  FParams[ptFFMpegReEncoding] := ParamVarTemplate(ptFFMpeg) + ' -i "%s" "%s"';
   FParams[ptVideoFormat] := DEFAULT_VIDEO_FORMAT;
   FParams[ptFFMpegFilterComplex] := ParamVarTemplate(ptFFMpeg)
-    + ' %s  -filter_complex "%s" -map "[v]" -map "[a]" -vcodec libx264 -vb 8M "%s"';
+    + ' %s  -filter_complex "%s" -map "[v]" -map "[a]" -vcodec libx264 "%s"';
 
 end;
 
@@ -888,6 +883,9 @@ var
     V: TVideoFileInfo;
     PrevTime: TDateTime;
   begin
+    if  WarnIfEmptyParam(ptFFMpegFilterComplex) then
+      Exit;
+
     TDirectory.CreateDirectory(GetConcatVidsDir);
     PartNo := 0;
     InputNo := 0;
@@ -909,7 +907,7 @@ var
 
           Trim := T.InPoint.Replace(':', '\:').QuotedString + ':' + T.OutPoint.Replace(':', '\:').QuotedString;
           FilterVideos := FilterVideos
-            + Format('[%d:v] trim=%s, %s[v%d],', [InputNo, Trim, SET_PTS, PartNo]);
+            + Format('[%d:v]trim=%s, %s[v%d],', [InputNo, Trim, SET_PTS, PartNo]);
           FilterAudios := FilterAudios
             + Format('[%d:a]atrim=%s,a%s[a%d],', [InputNo, Trim, SET_PTS, PartNo]);
           FilterConcat := FilterConcat + Format('[v%d][a%d]', [PartNo, PartNo]);
@@ -927,124 +925,14 @@ var
     FilterConcat := FilterConcat + Format('concat=n=%d:v=1:a=1[v][a]', [PartNo]);
     FFMpeg.Parameters := Format(FParams[ptFFMpegFilterComplex],
       [FilterInput, FilterVideos + FilterAudios + FilterConcat, OutputVideo]);
-    ExecuteAndWait(FFMpeg, ptFFMpegCut)
-
-  end;
-
-  { TODO : use this proc if no cutting needed }
-  procedure TrimSingly(V: TVideoFileInfo);
-  var
-    WorkDir: string;
-    PartsDemuxer: IJclStringList;
-    I: Integer;
-    T: TVideoPart;
-    VideoPartFile: TFilename;
-    VideoPartName: string;
-  begin
-
-
-    PartsDemuxer := JclStringList;
-
-    WorkDir := FDestinationDir + PathAddSeparator
-      (RemoveFileExt(ExtractFileName(V.OriginalFile)));
-
-    V.ModifiedFile := GetConcatVidsDir + ExtractDirName(WorkDir) + ExtractFileExt(V.OriginalFile);
-    TDirectory.CreateDirectory(GetConcatVidsDir);
-
-    // Cutting
-    if V.Parts.Count > 0 then
-    begin
-      TDirectory.CreateDirectory(WorkDir);
-      FFMpeg.CurrentDirectory := WorkDir;
-      PartsDemuxer.Add('# ' + V.Comment);
-
-      I := 1;
-
-      for T in V.Parts do
-        if UseConcatDemuxer then
-        begin
-          PartsDemuxer.Add('file '  + QuotedStr(V.OriginalFile));
-          PartsDemuxer.Add('inpoint ' + T.InPoint);
-          PartsDemuxer.Add('outpoint ' + T.OutPoint);
-          PartsDemuxer.Add('');
-        end
-        else
-        begin
-          { TODO : remove "part" hardcode }
-
-          if FParams[ptFFMpegCut] <> '' then
-          begin
-            //WritelnFmt('%s part %d of %d', [ParamActions[ptFFMpegCut], I, V.Parts.Count]);
-
-            WritelnFmt('Part %d of %d', [I, V.Parts.Count]);
-
-            FFMpeg.Parameters := Format(FParams[ptFFMpegCut],
-              [V.OriginalFile, T.InPoint, T.OutPoint]);
-            ExecuteAndWait(FFMpeg, ptFFMpegCut);
-
-            VideoPartName := Format('part %s to %s', [T.InPoint, T.OutPoint])
-              .Replace('.', '_').Replace(':', '-') + GetVideoExt;
-
-            VideoPartFile := FFMpeg.CurrentDirectory + VideoPartName;
-            if FileExists(VideoPartFile) then
-              Writeln('Part already exists');
-
-            if TFile.Exists(VideoPartFile) then
-              TFile.Delete(VideoPartFile);
-            TFile.Move(FFMpeg.CurrentDirectory + VIDEO_TEMP_PART_FILENAME + GetVideoExt,  VideoPartFile);
-
-
-            PartsDemuxer.Add('file ' + QuotedStr(VideoPartName));
-          end;
-          Inc(I);
-        end;
-
-      if FParams[ptFFMpegCut] <> '' then
-        PartsDemuxer.SaveToFile(WorkDir + CONCAT_DEMUXER_FILE);
-
-      // Concatenating parts
-      if FParams[ptFFMpegConcat] <> '' then
-      begin
-        if FileExists(V.ModifiedFile) then
-          TFile.Delete(V.ModifiedFile);
-        FFMpeg.Parameters := Format(FParams[ptFFMpegConcat], [V.ModifiedFile]);
-        ExecuteAndWait(FFMpeg, ptFFMpegConcat);
-      end;
-
-//  uselessly
-
-//      if UseConcatDemuxer then
-//      begin
-//        FFMpeg.CurrentDirectory := FDestinationDir;
-//        FFMpeg.Parameters := Format(FParams[ptFFMpegReEncoding],
-//          [V.ModifiedFile, V.ModifiedFile + '_.mp4']);
-//        ExecuteAndWait(FFMpeg, ptFFMpegReEncoding);
-//      end;
-
-    end
-    else // parts = 0
-    begin
-      WarnIfEmptyParam(ptFFMpegReEncoding);
-
-      if FParams[ptFFMpegReEncoding].IsEmpty or UseConcatDemuxer then
-        { TODO : avoid copying }
-        TFile.Copy(V.OriginalFile, V.ModifiedFile, True)
-      else
-      begin
-        // reencoding is needed to properly concatenate this video with other cutted videos
-        //WritelnFmt('%s "%s"', [ParamActions[ptFFMpegReEncoding],
-          // ExtractFileName(V.OriginalFile)]);
-        FFMpeg.CurrentDirectory := FDestinationDir;
-        FFMpeg.Parameters := Format(FParams[ptFFMpegReEncoding],
-          [V.OriginalFile, V.ModifiedFile]);
-        ExecuteAndWait(FFMpeg, ptFFMpegReEncoding);
-      end;
-    end;
+    ExecuteAndWait(FFMpeg, ptFFMpegFilterComplex)
 
   end;
 
   procedure ConcatAllVideos(OutputVideo: TFilename);
   begin
+    if WarnIfEmptyParam(ptFFMpegConcat) then
+      Exit;
     Writeln('');
     Writeln(ParamActions[ptConcatAll]);
     NewFilesDemuxer.SaveToFile(GetConcatVidsDir + CONCAT_DEMUXER_FILE);
@@ -1062,9 +950,7 @@ var
   FinalVideo: TFilename;
 begin
   Writeln('');
-  Writeln('Start cutting and concatenating');
-  WarnIfEmptyParam(ptFFMpegCut);
-  WarnIfEmptyParam(ptFFMpegConcat);
+  Writeln('Start trimming');
   NewFilesDemuxer := JclStringList;
   DownloadsDirName := ExtractFileName(PathRemoveSeparator(GetDownloadsDir));
 
@@ -1093,20 +979,13 @@ begin
 
     TrimViaFilterComplex(FVideos.ToArray, FinalVideo);
 
+// { TODO : check }
+//
+// if not HasCutting then
 //    for V in FVideos do
-//    begin
-//      Inc(I);
-//      if HasCutting then
-//      begin
-//        WritelnFmt('Processing %d of %d video: "%s"', [I, FVideos.Count, V.OriginalFile]);
-//        TrimSingly(V);
-//        NewFilesDemuxer.Add('file ' + QuotedStr(ExtractFileName(V.ModifiedFile)));
-//      end
-//      else
 //        NewFilesDemuxer.Add('file '
 //          + QuotedStr(DownloadsDirName.QuotedString + PathDelim + ExtractFileName(V.OriginalFile))
 //        );
-//    end;
 //
 //    ConcatAllVideos('..\' +  FinalVideo);
 
