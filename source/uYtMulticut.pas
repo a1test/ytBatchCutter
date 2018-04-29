@@ -14,8 +14,20 @@ procedure Run;
 type
 
   TVideoPart = record
-    InPoint: string;
-    OutPoint: string;
+  private
+    FInPoint: string;
+    FOutPoint: string;
+    procedure SetInPoint(const Value: string);
+    procedure SetOutPoint(const Value: string);
+    procedure CheckPoints;
+    function GetInPointTime: TDateTime;
+    function GetOutPointTime: TDateTime;
+  public
+    property  InPoint: string read FInPoint write SetInPoint;
+    property OutPoint: string read FOutPoint write SetOutPoint;
+    property InPointTime: TDateTime read GetInPointTime;
+    property OutPointTime: TDateTime read GetOutPointTime;
+    function GetDuration: TDateTime;
   end;
 
   TVideoFileInfo = class
@@ -26,10 +38,11 @@ type
     FComment: string;
     FVideoID: string;
     FDuration: TDateTime;
-    FOriginalFile: TFilename;
+    FOriginalFile: string;
     FModifiedFile: TFilename;
     procedure SetUrl(const Value: string);
     function GetPureUrl: string;
+    function GetDuration: TDateTime;
   public
     constructor Create;
     destructor Destroy; override;
@@ -39,8 +52,8 @@ type
     property Comment: string read FComment write FComment;
     property VideoID: string read FVideoID write FVideoID;
     property Parts: TList<TVideoPart> read FParts;
-    property Duration: TDateTime read FDuration write FDuration;
-    property OriginalFile: TFilename read FOriginalFile write FOriginalFile;
+    property Duration: TDateTime read GetDuration write FDuration;
+    property OriginalFile: string read FOriginalFile write FOriginalFile;
     property ModifiedFile: TFilename read FModifiedFile write FModifiedFile;
   end;
 
@@ -174,13 +187,16 @@ end;
 var
   FmtDotDecimalSeparator: TFormatSettings;
 
-function StrTimeLengthToTime(Str: string): TDateTime;
+function StrDurationToTime(Str: string): TDateTime;
 
   procedure Add00ToTime;
   begin
     Str := '00' + FormatSettings.TimeSeparator + Str;
   end;
 begin
+  if Str = '' then
+    Exit(0);
+
   // "XX" and "X:XX" writing must be changed to 00:XX:XX format to correctly converting.
   // Delphi handles 00:00 format as HH:MM while ffmpeg handles it as MM:SS
   case Str.CountChar(FormatSettings.TimeSeparator) of
@@ -247,6 +263,20 @@ destructor TVideoFileInfo.Destroy;
 begin
   FreeAndNil(FParts);
   inherited;
+end;
+
+function TVideoFileInfo.GetDuration: TDateTime;
+var
+  Part: TVideoPart;
+begin
+  Result := 0;
+
+  if FParts.Count = 0 then
+    Result := FDuration
+  else
+    for Part in FParts do
+      Result := Result + Part.GetDuration;
+
 end;
 
 function TVideoFileInfo.GetPureUrl: string;
@@ -438,7 +468,7 @@ begin
   FParams[ptFFMpegReEncoding] := ParamVarTemplate(ptFFMpeg) + ' -i "%s" "%s"';
   FParams[ptVideoFormat] := DEFAULT_VIDEO_FORMAT;
   FParams[ptFFMpegFilterComplex] := ParamVarTemplate(ptFFMpeg)
-    + ' %s -filter_complex "%s" -map "[v]" -map "[a]" "%s"';
+    + ' %s  -filter_complex "%s" -map "[v]" -map "[a]" -vcodec libx264 -vb 8M "%s"';
 
 end;
 
@@ -610,7 +640,7 @@ procedure TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList);
         try
           DurationStr := TFile.ReadAllText(DurationFile).Trim;
           Writeln(DurationStr);
-          V.Duration := StrTimeLengthToTime(DurationStr);
+          V.Duration := StrDurationToTime(DurationStr);
         except on E: Exception do
           if E is EAbort then
             raise
@@ -655,16 +685,18 @@ procedure TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList);
 
       if V.Duration = 0 then
       begin
-        AskContinue('Can''t determine video duration for "%s" (%s)',
-          [V.Url, V.Comment]);
+        if not V.Url.IsEmpty then
+          AskContinue('Can''t determine video duration for "%s"', [V.Url]);
         Continue;
       end;
 
       TotalDuration := TotalDuration + V.Duration;
-
-      I := Lines.IndexOf(V.Url);
-      if I = -1 then
-        I :=  Lines.IndexOf(V.OriginalFile);
+      if not V.Url.IsEmpty then
+        I := Lines.IndexOf(V.Url)
+      else if not V.OriginalFile.IsEmpty then
+        I := Lines.IndexOf(V.OriginalFile)
+      else
+        Continue;
 
       if I >= 0 then
       begin
@@ -692,7 +724,7 @@ procedure TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList);
       Lines.Add('');
     end;
     Lines.Values[ParamNames[ptTotalDuration]] := '    ' + TimeLengthToStr(TotalDuration, Format);
-    Writeln('Total duration = ' + TimeLengthToStr(TotalDuration, Format));
+    Writeln('Total duration ~ ' + TimeLengthToStr(TotalDuration, Format));
 
 
   end;
@@ -707,24 +739,6 @@ begin
 Getting this error if url is local file path:
 Writing video length failed: can't find video with url "" . Continue? [y/n] }
   try
-
-    for I := 0 to FVideos.Count - 1 do
-    begin
-      V := FVideos[I];
-      if (V.Parts.Count > 0) then
-      begin
-        V.Duration := 0;
-        for Part in V.Parts do
-        begin
-          PartDuration := StrTimeLengthToTime(Part.OutPoint) - StrTimeLengthToTime(Part.InPoint);
-          if PartDuration < 0 then
-            AskContinue('Inpoint "%s" > oupoint "%s" for video "%s"', [Part.InPoint, Part.OutPoint, V.VideoID]);
-
-          V.Duration := V.Duration + PartDuration;
-        end;
-      end;
-
-    end;
 
     Write(ParamActions[ptYoutubeDLGetDuration]);
     Write(Format(' for %d video(s)', [FVideos.Count]));
@@ -804,7 +818,7 @@ begin
       Video.OriginalFile := Line
     else if Lines[I].StartsWith(LENGTH_PARAM) then
     begin
-      Video.Duration := StrTimeLengthToTime(Lines[I].Substring(LENGTH_PARAM.Length))
+      Video.Duration := StrDurationToTime(Lines[I].Substring(LENGTH_PARAM.Length))
     end
     else if TryStrToInt(Line.Split([' ', ':', '.'])[0], Dummy) then
     begin
@@ -852,6 +866,16 @@ var
   NewFilesDemuxer: IJclStringList;
 
   procedure TrimViaFilterComplex(Videos: array of TVideoFileInfo; OutputVideo: TFilename);
+  var
+    FilterInput: string;
+    InputNo: Integer;
+
+    procedure AddVideoFileToFilterInput(Video: TVideoFileInfo);
+    begin
+      FilterInput := FilterInput + Format('-i "%s" ', [Video.OriginalFile]);
+      Inc(InputNo);
+    end;
+
   const
     SET_PTS = 'setpts=PTS-STARTPTS';
   var
@@ -859,28 +883,44 @@ var
     FilterVideos: string;
     FilterAudios: string;
     FilterConcat: string;
-    FilterInput: string;
     Trim: string;
-    PartNo, VideoNo: Integer;
+    PartNo: Integer;
     V: TVideoFileInfo;
+    PrevTime: TDateTime;
   begin
     TDirectory.CreateDirectory(GetConcatVidsDir);
     PartNo := 0;
-    VideoNo := 0;
+    InputNo := 0;
     for V in Videos do
     begin
-      FilterInput := FilterInput + Format('-i "%s" ', [V.OriginalFile]);
-      for T in V.Parts do
+
+      if V.Parts.Count = 0 then
       begin
-        Trim := T.InPoint.Replace(':', '\:').QuotedString + ':' + T.OutPoint.Replace(':', '\:').QuotedString;
-        FilterVideos := FilterVideos
-          + Format('[%d:v] trim=%s, %s[v%d],', [VideoNo, Trim, SET_PTS, PartNo]);
-        FilterAudios := FilterAudios
-          + Format('[%d:a]atrim=%s,a%s[a%d],', [VideoNo, Trim, SET_PTS, PartNo]);
-        FilterConcat := FilterConcat + Format('[v%d][a%d]', [PartNo, PartNo]);
+        FilterConcat := FilterConcat + Format('[%d:v][%d:a]', [InputNo, InputNo]);
         Inc(PartNo);
+      end
+      else
+      begin
+        PrevTime := 0;
+        for T in V.Parts do
+        begin
+          if T.InPointTime < PrevTime then
+            AddVideoFileToFilterInput(V);
+
+          Trim := T.InPoint.Replace(':', '\:').QuotedString + ':' + T.OutPoint.Replace(':', '\:').QuotedString;
+          FilterVideos := FilterVideos
+            + Format('[%d:v] trim=%s, %s[v%d],', [InputNo, Trim, SET_PTS, PartNo]);
+          FilterAudios := FilterAudios
+            + Format('[%d:a]atrim=%s,a%s[a%d],', [InputNo, Trim, SET_PTS, PartNo]);
+          FilterConcat := FilterConcat + Format('[v%d][a%d]', [PartNo, PartNo]);
+
+          PrevTime := T.InPointTime; // or OutPoint ? Check
+          Inc(PartNo);
+
+        end;
       end;
-      Inc(VideoNo);
+
+      AddVideoFileToFilterInput(V);
     end;
     if PartNo = 0 then
       PartNo := 1;
@@ -1059,7 +1099,7 @@ begin
 //      if HasCutting then
 //      begin
 //        WritelnFmt('Processing %d of %d video: "%s"', [I, FVideos.Count, V.OriginalFile]);
-//        CutAndConcat(V);
+//        TrimSingly(V);
 //        NewFilesDemuxer.Add('file ' + QuotedStr(ExtractFileName(V.ModifiedFile)));
 //      end
 //      else
@@ -1185,6 +1225,42 @@ begin
         WaitForEnterKeyForExit;
       end;
   end;
+end;
+
+{ TVideoPart }
+
+procedure TVideoPart.CheckPoints;
+begin
+  if not FOutPoint.IsEmpty and not FInPoint.IsEmpty and  (GetDuration < 0) then
+    AskContinue('Inpoint "%s" > oupoint "%s"', [FInPoint, FOutPoint]);
+end;
+
+function TVideoPart.GetDuration: TDateTime;
+begin
+  Result := GetOutPointTime - GetInPointTime;
+end;
+
+
+function TVideoPart.GetInPointTime: TDateTime;
+begin
+  Result := StrDurationToTime(FInPoint);
+end;
+
+function TVideoPart.GetOutPointTime: TDateTime;
+begin
+  Result := StrDurationToTime(FOutPoint);
+end;
+
+procedure TVideoPart.SetInPoint(const Value: string);
+begin
+  FInPoint := Value;
+  CheckPoints;
+end;
+
+procedure TVideoPart.SetOutPoint(const Value: string);
+begin
+  FOutPoint := Value;
+  CheckPoints;
 end;
 
 end.
