@@ -135,7 +135,8 @@ uses
   Math,
   JclFileUtils,
   DateUtils,
-  Variants;
+  Variants,
+  JclSysInfo;
 
 const
   EXITCODE_ABORT = 1;
@@ -168,11 +169,14 @@ begin
 end;
 
 
-procedure AskContinue(Msg: string; const Args: array of const); overload;
+procedure AskContinue(Msg: string; const Args: array of const; DontStopOnDebug: Boolean = False); overload;
 begin
   if not Msg.IsEmpty then
     Msg := Format(Msg + '. ', Args);
-  if not AskConfirmation(Msg + 'Continue?') then
+
+  if DontStopOnDebug then
+    WritelnFmt(Msg, Args)
+  else if not AskConfirmation(Msg + 'Continue?') then
   begin
     ExitCode := EXITCODE_ABORT;
     Abort;
@@ -433,6 +437,7 @@ procedure TYtMultiCut.ExecuteAndWait(ProcessCreator: TProcessCreator;
 begin
   Writeln(ProcessCreator.Parameters);
   Writeln('');
+  ProcessCreator.Parameters := ProcessCreator.Parameters.Replace(sLineBreak, '');
   ProcessCreator.Execute;
   if ProcessCreator.WaitFor = 0 then
     Exit;
@@ -845,7 +850,7 @@ begin
   end;
 
   if DelCount > 0 then
-    AskContinue('Found %d unrelated texts', [DelCount]);
+    AskContinue('Found %d unrelated texts', [DelCount], True);
 
 end;
 
@@ -862,69 +867,97 @@ var
 
   procedure TrimViaFilterComplex(Videos: array of TVideoFileInfo; OutputVideo: TFilename);
   var
-    FilterInput: string;
-    InputNo: Integer;
+    FilterInput: IJclStringList;
+    FilterVideosScale, FilterVideosTrim: IJclStringList;
+    FilterAudios: IJclStringList;
+    FilterConcat: string;
+    InputFileNo: Integer;
+    OutNo: Integer;
+    AIn, AOut, VIn, VOut: string;
 
-    procedure AddVideoFileToFilterInput(Video: TVideoFileInfo);
+    procedure AddInput(Video: TVideoFileInfo);
+    var
+      VStreamSource: string;
     begin
-      FilterInput := FilterInput + Format('-i "%s" ', [Video.OriginalFile]);
-      Inc(InputNo);
+      FilterInput.GetStringsRef.AddFmt('-i "%s" ', [Video.OriginalFile]);
+      Inc(InputFileNo);
+
+      AIn := InputFileNo.ToString + ':' + 'a'; // [0:a]
+      VIn := Format('%dv', [InputFileNo]); //[0v]
+      VStreamSource := InputFileNo.ToString + ':' + 'v'; // [0:v]
+      AOut := AIn;
+      VOut := VIn;
+      if InputFileNo = 0 then
+        // using setsar in case of some videos with SAR = 0:1 (!) with which scale2ref is useless
+        FilterVideosScale.GetStringsRef.AddFmt('[%s]setsar=1[%s]; ', [VStreamSource, VIn])
+      else
+      begin
+        FilterVideosScale.GetStringsRef.AddFmt('[%s][0v]scale2ref[s%s][0v]; ', [VStreamSource, VIn]);
+        VStreamSource := VIn;
+        FilterVideosScale.GetStringsRef.AddFmt('[s%s]setsar=1[%s]; ', [VStreamSource, VIn]);
+      end;
+    end;
+
+    procedure AddOut;
+    begin
+      FilterConcat := FilterConcat + Format('[%s][%s]', [VOut, AOut]);
+      Inc(OutNo);
     end;
 
   const
     SET_PTS = 'setpts=PTS-STARTPTS';
   var
     T: TVideoPart;
-    FilterVideos: string;
-    FilterAudios: string;
-    FilterConcat: string;
     Trim: string;
-    PartNo: Integer;
     V: TVideoFileInfo;
     PrevTime: TDateTime;
   begin
     if  WarnIfEmptyParam(ptFFMpegFilterComplex) then
       Exit;
 
+    FilterInput := JclStringList;
+
+    FilterVideosScale := JclStringList;
+    FilterVideosTrim := JclStringList;
+    FilterAudios := JclStringList;
+
+    FilterVideosScale.Add('');
+    OutNo := 0;
+
     TDirectory.CreateDirectory(GetConcatVidsDir);
-    PartNo := 0;
-    InputNo := 0;
+    InputFileNo := -1;
     for V in Videos do
     begin
 
+      AddInput(V);
+
+      PrevTime := 0;
       if V.Parts.Count = 0 then
-      begin
-        FilterConcat := FilterConcat + Format('[%d:v][%d:a]', [InputNo, InputNo]);
-        Inc(PartNo);
-      end
+        AddOut
       else
-      begin
-        PrevTime := 0;
         for T in V.Parts do
         begin
-          if T.InPointTime < PrevTime then
-            AddVideoFileToFilterInput(V);
+          //if T.InPointTime < PrevTime then
+          if PrevTime <> 0 then
+            AddInput(V); // otherwise it leads to Buffer queue overflow, dropping
 
           Trim := T.InPoint.Replace(':', '\:').QuotedString + ':' + T.OutPoint.Replace(':', '\:').QuotedString;
-          FilterVideos := FilterVideos
-            + Format('[%d:v]trim=%s, %s[v%d],', [InputNo, Trim, SET_PTS, PartNo]);
-          FilterAudios := FilterAudios
-            + Format('[%d:a]atrim=%s,a%s[a%d],', [InputNo, Trim, SET_PTS, PartNo]);
-          FilterConcat := FilterConcat + Format('[v%d][a%d]', [PartNo, PartNo]);
+
+          VOut := Format('%dv%d', [InputFileNo, OutNo]); //[v0-0]
+          AOut := Format('%da%d', [InputFileNo, OutNo]); //[v0-0]
+          FilterVideosTrim.GetStringsRef.AddFmt('[%s]trim=%s,%s[%s]; ', [VIn, Trim, SET_PTS, VOut]);
+          FilterAudios.GetStringsRef.AddFmt('[%s]atrim=%s,a%s[%s]; ', [AIn, Trim, SET_PTS, AOut]);
 
           PrevTime := T.InPointTime; // or OutPoint ? Check
-          Inc(PartNo);
 
+          AddOut;
         end;
-      end;
 
-      AddVideoFileToFilterInput(V);
     end;
-    if PartNo = 0 then
-      PartNo := 1;
-    FilterConcat := FilterConcat + Format('concat=n=%d:v=1:a=1[v][a]', [PartNo]);
+
+    FilterConcat := FilterConcat + Format('concat=n=%d:v=1:a=1[v][a]', [OutNo]);
     FFMpeg.Parameters := Format(FParams[ptFFMpegFilterComplex],
-      [FilterInput, FilterVideos + FilterAudios + FilterConcat, OutputVideo]);
+      [FilterInput.Text, FilterVideosScale.Text + FilterVideosTrim.Text + FilterAudios.Text  + FilterConcat, OutputVideo]);
     ExecuteAndWait(FFMpeg, ptFFMpegFilterComplex)
 
   end;
@@ -942,15 +975,32 @@ var
     TFile.Delete(GetConcatVidsDir + CONCAT_DEMUXER_FILE);
   end;
 
+const
+  KillFFMpegTimeout = 2000;
+  KillFFMpegWaitAfter = 500;
 var
   V: TVideoFileInfo;
   HasCutting: Boolean;
   DownloadsDirName: string;
   I: Integer;
   FinalVideo: TFilename;
+  PID: THandle;
 begin
   Writeln('');
   Writeln('Start trimming');
+
+  if DebugHook <> 0 then
+  begin
+    PID := GetPidFromProcessName(FFMpegExe);
+    if PID <> INVALID_HANDLE_VALUE then
+    begin
+      WritelnFmt('Terminating "%s"...', [FFMpegExe]);
+      if TerminateApp(PID, KillFFMpegTimeout) = taKill  then
+        Sleep(KillFFMpegWaitAfter);
+    end;
+  end;
+
+
   NewFilesDemuxer := JclStringList;
   DownloadsDirName := ExtractFileName(PathRemoveSeparator(GetDownloadsDir));
 
