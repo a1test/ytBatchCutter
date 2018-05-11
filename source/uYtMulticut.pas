@@ -80,7 +80,6 @@ type
     VIDEO_TEMP_PART_FILENAME = 'part_tmp';
 
     DEFAULT_VIDEO_FORMAT = 'mp4';
-    DEFAULT_USE_CONCAT_DEMUXER = False;
 
     ParamNames: array [TParamType] of string = ('concat-all', YoutubeDL, YoutubeDL + '-download', FFMpeg,
     FFMpeg + '-concat', FFMpeg + '-filter-complex',
@@ -106,7 +105,6 @@ type
     procedure AskIgnoreErrors(Param: TParamType);
     procedure ExecuteAndWait(ProcessCreator: TProcessCreator; Action: TParamType);
     function ParamVarTemplate(Param: TParamType): string;
-    function UseConcatDemuxer: Boolean;
     function GetVideoExt: string;
   public
     constructor Create;
@@ -555,24 +553,28 @@ procedure TYtMultiCut.ReadConfigParams(Lines: IJclStringList);
   procedure SetParam(Param: TParamType);
   var
     I: Integer;
+    Value: string;
+    P: TParamType;
   begin
     I := Lines.IndexOfName(ParamNames[Param]);
     if I >= 0 then
     begin
-      FParams[Param] := Lines.ValueFromIndex[I];
-      if Param in OutputParams then
-        Exit;
-
-      Writeln(Lines[I]);
+      Value := Lines.ValueFromIndex[I];
+      if not (Param in OutputParams) then
+        Writeln(Lines[I]);
     end
     else
     begin
-      if Param in OutputParams then
-        Exit;
-
-      Writeln(ParamNames[Param] + '=[DEFAULT VALUE]=' + IfThen(FParams[Param].IsEmpty, '[EMPTY]', FParams[Param]));
+      Value := FParams[Param];
+      if not (Param in OutputParams) then
+        Writeln(ParamNames[Param] + '=[DEFAULT]=' + FParams[Param]);
     end;
 
+    for P := Low(TParamType) to High(TParamType) do
+      if Value.Contains(ParamVarTemplate(P)) then
+        Value := Value.Replace(ParamVarTemplate(P), FParams[P]);
+
+    FParams[Param] := Value;
   end;
 
 var
@@ -582,12 +584,8 @@ begin
   for P := Low(TParamType) to High(TParamType) do
     SetParam(P);
 
-  { TODO : check replacing order }
-  for P := Low(TParamType) to High(TParamType) do
-    for P2 := Low(TParamType) to High(TParamType) do
-      if FParams[P].Contains(ParamVarTemplate(P2)) then
-        FParams[P] := FParams[P].Replace(ParamVarTemplate(P2), FParams[P2]);
 
+  Writeln;
 end;
 
 function TYtMultiCut.GetDownloadsDir: string;
@@ -741,7 +739,7 @@ Writing video length failed: can't find video with url "" . Continue? [y/n] }
   try
 
     Write(ParamActions[ptYoutubeDLGetDuration]);
-    Write(Format(' for %d video(s)', [FVideos.Count]));
+    Write(Format(' for %d videos...', [FVideos.Count]));
     Writeln;
 
     GetDurations;
@@ -1026,18 +1024,17 @@ begin
       FinalVideo := FinalVideo + GetVideoExt;
     if TFile.Exists(FFMpeg.CurrentDirectory + FinalVideo) then
       TFile.Delete(FFMpeg.CurrentDirectory + FinalVideo);
+    if True or HasCutting  then
+      TrimViaFilterComplex(FVideos.ToArray, FinalVideo)
+    else
+    begin
+      for V in FVideos do
+          NewFilesDemuxer.Add('file '
+            + QuotedStr(DownloadsDirName.QuotedString + PathDelim + ExtractFileName(V.OriginalFile))
+          );
 
-    TrimViaFilterComplex(FVideos.ToArray, FinalVideo);
-
-// { TODO : check }
-//
-// if not HasCutting then
-//    for V in FVideos do
-//        NewFilesDemuxer.Add('file '
-//          + QuotedStr(DownloadsDirName.QuotedString + PathDelim + ExtractFileName(V.OriginalFile))
-//        );
-//
-//    ConcatAllVideos('..\' +  FinalVideo);
+      ConcatAllVideos('..\' +  FinalVideo);
+    end;
 
     Writeln('Done.');
   finally
@@ -1072,14 +1069,6 @@ begin
   finally
     FreeAndNil(ResStream);
   end;
-end;
-
-
-
-function TYtMultiCut.UseConcatDemuxer: Boolean;
-begin
-  if not TryStrToBool(FParams[ptUseConcatDemuxer], Result) then
-    Result := DEFAULT_USE_CONCAT_DEMUXER;
 end;
 
 procedure WaitForEnterKeyForExit;
