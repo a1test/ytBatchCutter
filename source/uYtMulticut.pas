@@ -58,8 +58,8 @@ type
   end;
 
 type
-  TParamType = (ptConcatAll, ptYoutubeDL, ptYoutubeDLDownload, ptFFMpeg, ptFFMpegConcat,
-    ptFFMpegFilterComplex, ptYoutubeDLGetDuration, ptTotalDuration,
+  TParamType = (ptYoutubeDL, ptYoutubeDLDownload, ptFFMpeg, ptFFMpegConcat,
+    ptFFMpegFilterComplex, ptOutput, ptYoutubeDLGetDuration, ptTotalDuration,
     ptUseConcatDemuxer, ptVideoFormat);
   TParamStrArray = array [TParamType] of string;
 
@@ -80,12 +80,14 @@ type
     VIDEO_TEMP_PART_FILENAME = 'part_tmp';
 
     DEFAULT_VIDEO_FORMAT = 'mp4';
+    DEFAULT_OUTPUT_VIDEO_FILENAME = 'Output';
+    DEFAULT_USE_CONCAT_DEMUXER = False;
 
-    ParamNames: array [TParamType] of string = ('concat-all', YoutubeDL, YoutubeDL + '-download', FFMpeg,
-    FFMpeg + '-concat', FFMpeg + '-filter-complex',
-      'get-length', 'total-length', 'use-concat-demuxer', 'video-format');
-    ParamActions: array [TParamType] of string = ('Concatenating all videos' ,
-      'Youtube-DL', 'Downloading', 'FFMpeg', 'Concatenating', 'Trimming',
+    ParamNames: array [TParamType] of string = (YoutubeDL, YoutubeDL + '-download', FFMpeg,
+    FFMpeg + '-concat', FFMpeg + '-filter', 'output',
+      'get-length', 'total-length',  'use-concat-demuxer', 'format');
+    ParamActions: array [TParamType] of string = ('Youtube-DL', 'Downloading',
+      'FFMpeg', 'Concatenating', 'Trimming', 'Output',
       'Getting durations', 'Total duration', 'Use concat demuxer', 'Video format');
     OutputParams: set of TParamType = [ptTotalDuration];
 
@@ -98,7 +100,7 @@ type
     FHasErrors: Boolean;
     function GetDownloadsDir: string;
     function GetConcatVidsDir: string;
-    procedure LoadVideoList(Lines: IJclStringList);
+    procedure ParseVideoList(Lines: IJclStringList);
     procedure ReadConfigParams(Lines: IJclStringList);
     function WarnIfEmptyParam(Param: TParamType): Boolean;
     procedure FindDownloadedFiles;
@@ -110,6 +112,7 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure DownloadVideos;
+    function UseConcatDemuxer: Boolean;
     procedure GetAndWriteVideoDurations(InputData: IJclStringList);
     procedure LoadInputData(InputData: IJclStringList);
     function TrimVideos: TFilename;
@@ -420,7 +423,7 @@ begin
   if FIgnoreErrors[Param] then
     Exit;
 
-  Writeln('Ignore such errors? [y/n/a] Type "a" for ignore all ffmpeg or youtube-dl errors');
+  Writeln('Ignore such warnings? [y/n/a] Type "a" to ignore all type of warnings');
   case ReadChar(['y', 'n', 'a']) of
     'y':
       FIgnoreErrors[Param] := True;
@@ -447,8 +450,6 @@ begin
       AskIgnoreErrors(Action);
     ptYoutubeDLDownload:
       AskContinue;
-    ptConcatAll:
-      ;
   else
     AskContinue;
   end;
@@ -464,16 +465,25 @@ begin
   FParams[ptYoutubeDLDownload] := ParamVarTemplate(ptYoutubeDL) + ' -f best';
   FParams[ptYoutubeDLGetDuration] := 'cmd /c ' + ParamVarTemplate(ptYoutubeDL) + ' %s --get-duration > %s';
   FParams[ptFFMpeg] := FFmpegExe + ' -hide_banner -loglevel info';
+  FParams[ptFFMpegConcat] := ParamVarTemplate(ptFFMpeg) + '  -f concat -safe 0 -i ' +
+    CONCAT_DEMUXER_FILE + ' -c copy "%s" -y';
   FParams[ptVideoFormat] := DEFAULT_VIDEO_FORMAT;
+  FParams[ptUseConcatDemuxer] := Integer(DEFAULT_USE_CONCAT_DEMUXER).ToString;
   FParams[ptFFMpegFilterComplex] := ParamVarTemplate(ptFFMpeg)
     + ' %s  -filter_complex "%s" -map "[v]" -map "[a]" -vcodec libx264 "%s"';
-
+  FParams[ptOutput] := DEFAULT_OUTPUT_VIDEO_FILENAME;
 end;
 
 destructor TYtMultiCut.Destroy;
 begin
   FreeAndNil(FVideos);
   inherited;
+end;
+
+function TYtMultiCut.UseConcatDemuxer: Boolean;
+begin
+  if not TryStrToBool(FParams[ptUseConcatDemuxer], Result) then
+    Result := DEFAULT_USE_CONCAT_DEMUXER;
 end;
 
 procedure TYtMultiCut.FindDownloadedFiles;
@@ -583,7 +593,6 @@ begin
   Writeln('Reading config params...');
   for P := Low(TParamType) to High(TParamType) do
     SetParam(P);
-
 
   Writeln;
 end;
@@ -758,11 +767,11 @@ end;
 procedure TYtMultiCut.LoadInputData(InputData: IJclStringList);
 begin
   ReadConfigParams(InputData);
-  LoadVideoList(InputData);
+  ParseVideoList(InputData);
 
 end;
 
-procedure TYtMultiCut.LoadVideoList(Lines: IJclStringList);
+procedure TYtMultiCut.ParseVideoList(Lines: IJclStringList);
 
   function IsParam(Line: string): Boolean;
   var
@@ -781,7 +790,7 @@ var
   I, Dummy: Integer;
   DelCount: Integer;
 begin
-  Writeln('Loading video list...');
+  Writeln('Parsing video list...');
 
   PrevLineEmpty := True;
   Video := nil;
@@ -797,7 +806,8 @@ begin
     if IsParam(Line) then
       Continue;
 
-
+    if Line.StartsWith('#') then
+      Continue;
     if PrevLineEmpty then
     begin
       Video := TVideoFileInfo.Create;
@@ -805,8 +815,6 @@ begin
     end;
 
     PrevLineEmpty := False;
-    if Line.StartsWith('#') then
-      Continue;
     if Line.StartsWith('http') then
     begin
       Video.Url := Line;
@@ -965,29 +973,22 @@ var
     if WarnIfEmptyParam(ptFFMpegConcat) then
       Exit;
     Writeln('');
-    Writeln(ParamActions[ptConcatAll]);
-    NewFilesDemuxer.SaveToFile(GetConcatVidsDir + CONCAT_DEMUXER_FILE);
-    FFMpeg.CurrentDirectory := GetConcatVidsDir;
-    FFMpeg.Parameters := Format(FParams[ptFFMpegConcat], [OutputVideo]);
-    ExecuteAndWait(FFMpeg, ptConcatAll);
-    TFile.Delete(GetConcatVidsDir + CONCAT_DEMUXER_FILE);
+    Writeln(ParamActions[ptFFMpegConcat]);
+    NewFilesDemuxer.SaveToFile(FFMpeg.CurrentDirectory + CONCAT_DEMUXER_FILE);
+    try
+      FFMpeg.Parameters := Format(FParams[ptFFMpegConcat], [OutputVideo]);
+      ExecuteAndWait(FFMpeg, ptFFMpegConcat);
+    finally
+      //TFile.Delete(GetConcatVidsDir + CONCAT_DEMUXER_FILE);
+    end;
   end;
 
-const
-  KillFFMpegTimeout = 2000;
-  KillFFMpegWaitAfter = 500;
-var
-  V: TVideoFileInfo;
-  HasCutting: Boolean;
-  DownloadsDirName: string;
-  I: Integer;
-  FinalVideo: TFilename;
-  PID: THandle;
-begin
-  Writeln('');
-  Writeln('Start trimming');
-
-  if DebugHook <> 0 then
+  procedure KillFFMpeg;
+  const
+    KillFFMpegTimeout = 2000;
+    KillFFMpegWaitAfter = 500;
+  var
+    PID: THandle;
   begin
     PID := GetPidFromProcessName(FFMpegExe);
     if PID <> INVALID_HANDLE_VALUE then
@@ -998,6 +999,18 @@ begin
     end;
   end;
 
+var
+  V: TVideoFileInfo;
+  HasCutting: Boolean;
+  DownloadsDirName: string;
+  I: Integer;
+  FinalVideo: TFilename;
+begin
+  Writeln('');
+  Writeln('Start trimming');
+
+  if DebugHook <> 0 then
+    KillFFMpeg;
 
   NewFilesDemuxer := JclStringList;
   DownloadsDirName := ExtractFileName(PathRemoveSeparator(GetDownloadsDir));
@@ -1017,14 +1030,13 @@ begin
     //FFMpeg.CreationFlags := CREATE_NEW_CONSOLE;
     FFMpeg.CurrentDirectory := FDestinationDir;
 
-    I := 0;
-
-    FinalVideo := IfThen(FParams[ptConcatAll].IsEmpty, 'final', FParams[ptConcatAll]);
+    FinalVideo := FParams[ptOutput];
     if not ExtractFileExt(FinalVideo).EndsWith(GetVideoExt, True) then
       FinalVideo := FinalVideo + GetVideoExt;
     if TFile.Exists(FFMpeg.CurrentDirectory + FinalVideo) then
       TFile.Delete(FFMpeg.CurrentDirectory + FinalVideo);
-    if True or HasCutting  then
+
+    if HasCutting or not UseConcatDemuxer then
       TrimViaFilterComplex(FVideos.ToArray, FinalVideo)
     else
     begin
@@ -1033,7 +1045,7 @@ begin
             + QuotedStr(DownloadsDirName.QuotedString + PathDelim + ExtractFileName(V.OriginalFile))
           );
 
-      ConcatAllVideos('..\' +  FinalVideo);
+      ConcatAllVideos(FinalVideo);
     end;
 
     Writeln('Done.');
