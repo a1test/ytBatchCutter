@@ -60,7 +60,7 @@ type
 type
   TParamType = (ptYoutubeDL, ptYoutubeDLDownload, ptFFMpeg, ptFFMpegConcat,
     ptFFMpegFilterComplex, ptOutput, ptYoutubeDLGetDuration, ptTotalDuration,
-    ptUseConcatDemuxer, ptVideoFormat);
+    ptUseConcatDemuxer, ptVideoFormat, ptDiffrentScale);
   TParamStrArray = array [TParamType] of string;
 
 var
@@ -80,15 +80,16 @@ type
     VIDEO_TEMP_PART_FILENAME = 'part_tmp';
 
     DEFAULT_VIDEO_FORMAT = 'mp4';
-    DEFAULT_OUTPUT_VIDEO_FILENAME = 'Output';
     DEFAULT_USE_CONCAT_DEMUXER = False;
+    DEFAULT_DIFFERENT_SCALE = False;
 
     ParamNames: array [TParamType] of string = (YoutubeDL, YoutubeDL + '-download', FFMpeg,
     FFMpeg + '-concat', FFMpeg + '-filter', 'output',
-      'get-length', 'total-length',  'use-concat-demuxer', 'format');
+      'get-length', 'total-length',  'use-concat-demuxer', 'format', 'different-scale');
     ParamActions: array [TParamType] of string = ('Youtube-DL', 'Downloading',
       'FFMpeg', 'Concatenating', 'Trimming', 'Output',
-      'Getting durations', 'Total duration', 'Use concat demuxer', 'Video format');
+      'Getting durations', 'Total duration', 'Use concat demuxer', 'Video format',
+      'Different scale');
     OutputParams: set of TParamType = [ptTotalDuration];
 
     procedure SetDestinationDir(const Value: string);
@@ -103,7 +104,6 @@ type
     procedure ParseVideoList(Lines: IJclStringList);
     procedure ReadConfigParams(Lines: IJclStringList);
     function WarnIfEmptyParam(Param: TParamType): Boolean;
-    procedure FindDownloadedFiles;
     procedure AskIgnoreErrors(Param: TParamType);
     procedure ExecuteAndWait(ProcessCreator: TProcessCreator; Action: TParamType);
     function ParamVarTemplate(Param: TParamType): string;
@@ -112,10 +112,11 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure DownloadVideos;
-    function UseConcatDemuxer: Boolean;
+    procedure FindDownloadedVideos;
+    function IsParamEnabled(Param: TParamType): Boolean;
     procedure GetAndWriteVideoDurations(InputData: IJclStringList);
     procedure LoadInputData(InputData: IJclStringList);
-    function TrimVideos: TFilename;
+    procedure TrimVideos(OutputVideo: TFilename);
     procedure ShowReadmeText;
     property DestinationDir: string read FDestinationDir
       write SetDestinationDir;
@@ -469,9 +470,10 @@ begin
     CONCAT_DEMUXER_FILE + ' -c copy "%s" -y';
   FParams[ptVideoFormat] := DEFAULT_VIDEO_FORMAT;
   FParams[ptUseConcatDemuxer] := Integer(DEFAULT_USE_CONCAT_DEMUXER).ToString;
+  FParams[ptDiffrentScale] := Integer(DEFAULT_DIFFERENT_SCALE).ToString;
   FParams[ptFFMpegFilterComplex] := ParamVarTemplate(ptFFMpeg)
     + ' %s  -filter_complex "%s" -map "[v]" -map "[a]" -vcodec libx264 "%s"';
-  FParams[ptOutput] := DEFAULT_OUTPUT_VIDEO_FILENAME;
+  FParams[ptOutput] := '';
 end;
 
 destructor TYtMultiCut.Destroy;
@@ -480,13 +482,7 @@ begin
   inherited;
 end;
 
-function TYtMultiCut.UseConcatDemuxer: Boolean;
-begin
-  if not TryStrToBool(FParams[ptUseConcatDemuxer], Result) then
-    Result := DEFAULT_USE_CONCAT_DEMUXER;
-end;
-
-procedure TYtMultiCut.FindDownloadedFiles;
+procedure TYtMultiCut.FindDownloadedVideos;
 var
   V, V2: TVideoFileInfo;
   Files: IJclStringList;
@@ -559,6 +555,8 @@ begin
 end;
 
 procedure TYtMultiCut.ReadConfigParams(Lines: IJclStringList);
+var
+  ChangedParams: set of TParamType;
 
   procedure SetParam(Param: TParamType);
   var
@@ -570,14 +568,11 @@ procedure TYtMultiCut.ReadConfigParams(Lines: IJclStringList);
     if I >= 0 then
     begin
       Value := Lines.ValueFromIndex[I];
-      if not (Param in OutputParams) then
-        Writeln(Lines[I]);
+      Include(ChangedParams, Param);
     end
     else
     begin
       Value := FParams[Param];
-      if not (Param in OutputParams) then
-        Writeln(ParamNames[Param] + '=[DEFAULT]=' + FParams[Param]);
     end;
 
     for P := Low(TParamType) to High(TParamType) do
@@ -590,10 +585,23 @@ procedure TYtMultiCut.ReadConfigParams(Lines: IJclStringList);
 var
   P, P2: TParamType;
 begin
+  ChangedParams := [];
+
   Writeln('Reading config params...');
   for P := Low(TParamType) to High(TParamType) do
     SetParam(P);
-
+  Writeln;
+  Writeln('Defaults:');
+  for P := Low(TParamType) to High(TParamType) do
+    if not (P in OutputParams)  then
+      if not (P in ChangedParams) then
+        Writeln(ParamNames[P] + '=' + FParams[P]);
+  Writeln;
+  Writeln('Changed:');
+  for P := Low(TParamType) to High(TParamType) do
+    if not (P in OutputParams) then
+      if (P in ChangedParams) then
+        Writeln(ParamNames[P] + '=' + FParams[P]);
   Writeln;
 end;
 
@@ -605,6 +613,12 @@ end;
 function TYtMultiCut.GetVideoExt: string;
 begin
   Result := '.' + FParams[ptVideoFormat];
+end;
+
+function TYtMultiCut.IsParamEnabled(Param: TParamType): Boolean;
+begin
+  if not TryStrToBool(FParams[Param], Result) then
+    Result := False;
 end;
 
 function TYtMultiCut.WarnIfEmptyParam(Param: TParamType): Boolean;
@@ -820,7 +834,7 @@ begin
       Video.Url := Line;
       Lines[I] := Line;
     end
-    else if Line.Contains(':\') and TFile.Exists(Line) then
+    else if Line.Contains(':\') and TFile.Exists(Line.DeQuotedString('"')) then
       Video.OriginalFile := Line
     else if Lines[I].StartsWith(LENGTH_PARAM) then
     begin
@@ -865,7 +879,7 @@ begin
   Result := '%' + ParamNames[Param] + '%';
 end;
 
-function TYtMultiCut.TrimVideos: TFilename;
+procedure TYtMultiCut.TrimVideos(OutputVideo: TFilename);
 
 var
   FFMpeg: TProcessCreator;
@@ -943,9 +957,12 @@ var
       else
         for T in V.Parts do
         begin
-          //if T.InPointTime < PrevTime then
-          if PrevTime <> 0 then
-            AddInput(V); // otherwise it leads to Buffer queue overflow, dropping
+          // need to add new input for each video part if videos are different scaled
+          // or if parts are not in chronological order
+          // otherwise it leads to Buffer queue overflow, dropping
+          if (IsParamEnabled(ptDiffrentScale) and (PrevTime <> 0))
+            or (T.InPointTime < PrevTime) then
+              AddInput(V);
 
           Trim := T.InPoint.Replace(':', '\:').QuotedString + ':' + T.OutPoint.Replace(':', '\:').QuotedString;
 
@@ -1004,7 +1021,6 @@ var
   HasCutting: Boolean;
   DownloadsDirName: string;
   I: Integer;
-  FinalVideo: TFilename;
 begin
   Writeln('');
   Writeln('Start trimming');
@@ -1030,14 +1046,15 @@ begin
     //FFMpeg.CreationFlags := CREATE_NEW_CONSOLE;
     FFMpeg.CurrentDirectory := FDestinationDir;
 
-    FinalVideo := FParams[ptOutput];
-    if not ExtractFileExt(FinalVideo).EndsWith(GetVideoExt, True) then
-      FinalVideo := FinalVideo + GetVideoExt;
-    if TFile.Exists(FFMpeg.CurrentDirectory + FinalVideo) then
-      TFile.Delete(FFMpeg.CurrentDirectory + FinalVideo);
+    if not FParams[ptOutput].IsEmpty then
+      OutputVideo := FParams[ptOutput];
+    if not ExtractFileExt(OutputVideo).EndsWith(GetVideoExt, True) then
+      OutputVideo := OutputVideo + GetVideoExt;
+    if TFile.Exists(FFMpeg.CurrentDirectory + OutputVideo) then
+      TFile.Delete(FFMpeg.CurrentDirectory + OutputVideo);
 
-    if HasCutting or not UseConcatDemuxer then
-      TrimViaFilterComplex(FVideos.ToArray, FinalVideo)
+    if HasCutting or not IsParamEnabled(ptUseConcatDemuxer) then
+      TrimViaFilterComplex(FVideos.ToArray, OutputVideo)
     else
     begin
       for V in FVideos do
@@ -1045,7 +1062,7 @@ begin
             + QuotedStr(DownloadsDirName.QuotedString + PathDelim + ExtractFileName(V.OriginalFile))
           );
 
-      ConcatAllVideos(FinalVideo);
+      ConcatAllVideos(OutputVideo);
     end;
 
     Writeln('Done.');
@@ -1131,10 +1148,14 @@ begin
       if InputLines.Text.Trim <> TFile.ReadAllText(InputFile).Trim then
         InputLines.SaveToFile(InputFile);
 
+      { TODO : Don't ask }
       if not AskConfirmation('Skip downloading?') then
         Cutter.DownloadVideos;
-      Cutter.FindDownloadedFiles;
-      Cutter.TrimVideos;
+      Cutter.FindDownloadedVideos;
+      if Cutter.FVideos.Count = 0 then
+        raise Exception.Create('Null video count');
+
+      Cutter.TrimVideos(ChangeFileExt(ExtractFileName(InputFile), Cutter.GetVideoExt));
 
       //if Cutter.HasErrors then
         //WaitForEnterKeyForExit;
