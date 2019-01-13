@@ -59,8 +59,8 @@ type
 
 type
   TParamType = (ptYoutubeDL, ptYoutubeDLDownload, ptFFMpeg, ptFFMpegConcat,
-    ptFFMpegFilterComplex, ptOutput, ptYoutubeDLGetDuration, ptTotalDuration,
-    ptUseConcatDemuxer, ptVideoFormat, ptDiffrentScale);
+    ptFFMpegFilterComplex, ptOutput, ptYoutubeDLGetDuration,
+    ptUseConcatDemuxer, ptVideoFormat, ptDifferentScale);
   TParamStrArray = array [TParamType] of string;
 
 var
@@ -84,15 +84,25 @@ type
 
     ParamNames: array [TParamType] of string = (YoutubeDL, YoutubeDL + '-download', FFMpeg,
     FFMpeg + '-concat', FFMpeg + '-filter', 'output',
-      'get-length', 'total-length',  'use-concat-demuxer', 'format', 'different-scale');
-    ParamActions: array [TParamType] of string = ('Youtube-DL', 'Downloading',
-      'FFMpeg', 'Concatenating', 'Trimming', 'Output',
-      'Getting durations', 'Total duration', 'Use concat demuxer', 'Video format',
-      'Different scale');
+      'get-length', 'use-concat-demuxer', 'format', 'different-scale');
+    ParamActions: array [TParamType] of string = ('', 'Downloading',
+      '', 'Concatenating', 'Trimming', 'Output',
+      'Getting durations', '', '',
+      '');
 
-      { TODO : add parameter description and display it on ShowReadmeText }
+    OUTPUT_TOTAL_DURATION = 'total-length';
 
-    OutputParams: set of TParamType = [ptTotalDuration];
+    ParamHints: array [TParamType] of string = (
+      YoutubeDL + ' path',
+      YoutubeDL + ' downloading command line',
+      FFMpeg + ' path',
+      FFMpeg + ' concat demuxer command line',
+      FFMpeg + ' filter-complex trimming command line',
+      'output file name',
+      YoutubeDL + ' getting video duration command line',
+      'use concat demuxer',
+      'video format',
+      'set if input videos has different scale');
 
     procedure SetDestinationDir(const Value: string);
 
@@ -416,7 +426,7 @@ begin
   FVideoID := GetPureUrl.Substring(I);
 end;
 
-{ TYoutubeMultiCutter }
+{ TYtBatchCutter }
 
 procedure TYtBatchCutter.AskIgnoreErrors(Param: TParamType);
 var
@@ -471,7 +481,7 @@ begin
     CONCAT_DEMUXER_FILE + ' -c copy "%s" -y';
   FParams[ptVideoFormat] := DEFAULT_VIDEO_FORMAT;
   FParams[ptUseConcatDemuxer] := Integer(DEFAULT_USE_CONCAT_DEMUXER).ToString;
-  FParams[ptDiffrentScale] := Integer(DEFAULT_DIFFERENT_SCALE).ToString;
+  FParams[ptDifferentScale] := Integer(DEFAULT_DIFFERENT_SCALE).ToString;
   FParams[ptFFMpegFilterComplex] := ParamVarTemplate(ptFFMpeg)
     + ' %s  -filter_complex "%s" -map "[v]" -map "[a]" -vcodec libx264 "%s"';
   FParams[ptOutput] := '';
@@ -605,15 +615,13 @@ begin
   Writeln;
   Writeln('Defaults:');
   for P := Low(TParamType) to High(TParamType) do
-    if not (P in OutputParams)  then
-      if not (P in ChangedParams) then
-        Writeln(ParamNames[P] + '=' + FParams[P]);
+    if not (P in ChangedParams) then
+      Writeln(ParamNames[P] + '=' + FParams[P]);
   Writeln;
   Writeln('Changed:');
   for P := Low(TParamType) to High(TParamType) do
-    if not (P in OutputParams) then
-      if (P in ChangedParams) then
-        Writeln(ParamNames[P] + '=' + FParams[P]);
+    if (P in ChangedParams) then
+      Writeln(ParamNames[P] + '=' + FParams[P]);
   Writeln;
 end;
 
@@ -749,14 +757,14 @@ procedure TYtBatchCutter.GetAndWriteVideoDurations(InputData: IJclStringList);
 
     end;
 
-    if Lines.IndexOfName(ParamNames[ptTotalDuration]) < 0 then
+    if Lines.IndexOfName(OUTPUT_TOTAL_DURATION) < 0 then
     begin
 
       if Lines.Last = '' then
         Lines.Delete(Lines.Count - 1);
       Lines.Add('');
     end;
-    Lines.Values[ParamNames[ptTotalDuration]] := '    ' + TimeLengthToStr(TotalDuration, Format);
+    Lines.Values[OUTPUT_TOTAL_DURATION] := '    ' + TimeLengthToStr(TotalDuration, Format);
     Writeln('Total duration ~ ' + TimeLengthToStr(TotalDuration, Format));
 
 
@@ -964,7 +972,7 @@ var
           // need to add new input for each video part if videos are different scaled
           // or if parts are not in chronological order
           // otherwise it leads to Buffer queue overflow, dropping
-          if (IsParamEnabled(ptDiffrentScale) and (PrevTime <> 0))
+          if (IsParamEnabled(ptDifferentScale) and (PrevTime <> 0))
             or (T.InPointTime < PrevTime) then
               AddInput(V);
 
@@ -1097,6 +1105,7 @@ var
   Text: IJclStringList;
   S: string;
   P: TParamType;
+  MaxNameLength: Integer;
 begin
   ResStream := TResourceStream.Create(hInstance, 'UsageHelp', RT_RCDATA);
   try
@@ -1105,8 +1114,17 @@ begin
     for S in Text do
       Writeln(S);
 
-    Writeln('');
-    Writeln('Default parameters:');
+    MaxNameLength := -1;
+    for P := Low(TParamType) to High(TParamType) do
+      MaxNameLength := Max(MaxNameLength, ParamNames[P].Length);
+
+    Writeln;
+    Writeln('Parameters: ');
+    for P := Low(TParamType) to High(TParamType) do
+      WritelnFmt('%-' + MaxNameLength.ToString +  's %s', [ParamNames[P], ParamHints[P]]);
+
+    Writeln;
+    Writeln('Default values:');
     for P := Low(TParamType) to High(TParamType) do
       Writeln(ParamNames[P] + '=' + FParams[P]);
 

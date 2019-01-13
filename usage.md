@@ -51,6 +51,6 @@ Example of file:
 ```
 
 `ffmpeg` and `youtube-dl` parameters should contain path to ffmpeg.exe and youtube-dl.exe, respectively, if they are not specified in %PATH% variable.
-If some parameter is not specified the default value will be used. For view all possible parameters and its values run program without parameters.
+If some parameter is not specified the default value will be used. For view parameters info run program without parameters.
 If `output` parameter is not specified the `INPUTFILE` name will be used as output file name.
 Empty action-parameter value will lead to skipping corresponding action.
