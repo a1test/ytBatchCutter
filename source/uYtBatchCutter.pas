@@ -1,4 +1,4 @@
-unit uYtMulticut;
+unit uYtBatchCutter;
 
 interface
 
@@ -67,7 +67,7 @@ var
   FParams: TParamStrArray; // moving this to class makes Ctrl+Space IMPORSSIBRU11
 
 type
-  TYtMultiCut = class
+  TYtBatchCutter = class
   private const
 
     YoutubeDL = 'youtube-dl';
@@ -77,7 +77,6 @@ type
 
     CONCAT_DEMUXER_FILE = 'concat.txt';
     LENGTH_PARAM = '        length = ';
-    VIDEO_TEMP_PART_FILENAME = 'part_tmp';
 
     DEFAULT_VIDEO_FORMAT = 'mp4';
     DEFAULT_USE_CONCAT_DEMUXER = False;
@@ -417,7 +416,7 @@ end;
 
 { TYoutubeMultiCutter }
 
-procedure TYtMultiCut.AskIgnoreErrors(Param: TParamType);
+procedure TYtBatchCutter.AskIgnoreErrors(Param: TParamType);
 var
   PT: TParamType;
 begin
@@ -434,7 +433,7 @@ begin
   end;
 end;
 
-procedure TYtMultiCut.ExecuteAndWait(ProcessCreator: TProcessCreator;
+procedure TYtBatchCutter.ExecuteAndWait(ProcessCreator: TProcessCreator;
   Action: TParamType);
 begin
   Writeln(ProcessCreator.Parameters);
@@ -458,7 +457,7 @@ begin
 
 end;
 
-constructor TYtMultiCut.Create;
+constructor TYtBatchCutter.Create;
 begin
   inherited Create;
   FVideos := TObjectList<TVideoFileInfo>.Create;
@@ -476,13 +475,13 @@ begin
   FParams[ptOutput] := '';
 end;
 
-destructor TYtMultiCut.Destroy;
+destructor TYtBatchCutter.Destroy;
 begin
   FreeAndNil(FVideos);
   inherited;
 end;
 
-procedure TYtMultiCut.FindDownloadedVideos;
+procedure TYtBatchCutter.FindDownloadedVideos;
 var
   V: TVideoFileInfo;
   Files: IJclStringList;
@@ -528,7 +527,7 @@ begin
 
 end;
 
-function TYtMultiCut.DownloadVideos: Boolean;
+function TYtBatchCutter.DownloadVideos: Boolean;
 var
   V: TVideoFileInfo;
   YoutubeDLProcess: TProcessCreator;
@@ -565,7 +564,7 @@ begin
 
 end;
 
-procedure TYtMultiCut.ReadConfigParams(Lines: IJclStringList);
+procedure TYtBatchCutter.ReadConfigParams(Lines: IJclStringList);
 var
   ChangedParams: set of TParamType;
 
@@ -616,23 +615,23 @@ begin
   Writeln;
 end;
 
-function TYtMultiCut.GetDownloadsDir: string;
+function TYtBatchCutter.GetDownloadsDir: string;
 begin
   Result := PathAddSeparator(FDestinationDir + '_downloads');
 end;
 
-function TYtMultiCut.GetVideoExt: string;
+function TYtBatchCutter.GetVideoExt: string;
 begin
   Result := '.' + FParams[ptVideoFormat];
 end;
 
-function TYtMultiCut.IsParamEnabled(Param: TParamType): Boolean;
+function TYtBatchCutter.IsParamEnabled(Param: TParamType): Boolean;
 begin
   if not TryStrToBool(FParams[Param], Result) then
     Result := False;
 end;
 
-function TYtMultiCut.WarnIfEmptyParam(Param: TParamType): Boolean;
+function TYtBatchCutter.WarnIfEmptyParam(Param: TParamType): Boolean;
 begin
   Result := FParams[Param].IsEmpty;
   if Result then
@@ -642,7 +641,7 @@ begin
 end;
 
 
-procedure TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList);
+procedure TYtBatchCutter.GetAndWriteVideoDurations(InputData: IJclStringList);
 
 
   procedure GetDurations;
@@ -779,19 +778,19 @@ Writing video length failed: can't find video with url "" . Continue? [y/n] }
 
 end;
 
-function TYtMultiCut.GetConcatVidsDir: string;
+function TYtBatchCutter.GetConcatVidsDir: string;
 begin
   Result := PathAddSeparator(FDestinationDir + '_concatenated');
 end;
 
-procedure TYtMultiCut.LoadInputData(InputData: IJclStringList);
+procedure TYtBatchCutter.LoadInputData(InputData: IJclStringList);
 begin
   ReadConfigParams(InputData);
   ParseVideoList(InputData);
 
 end;
 
-procedure TYtMultiCut.ParseVideoList(Lines: IJclStringList);
+procedure TYtBatchCutter.ParseVideoList(Lines: IJclStringList);
 
   function IsParam(Line: string): Boolean;
   var
@@ -880,12 +879,12 @@ begin
 
 end;
 
-function TYtMultiCut.ParamVarTemplate(Param: TParamType): string;
+function TYtBatchCutter.ParamVarTemplate(Param: TParamType): string;
 begin
   Result := '%' + ParamNames[Param] + '%';
 end;
 
-procedure TYtMultiCut.TrimVideos(OutputVideo: TFilename);
+procedure TYtBatchCutter.TrimVideos(OutputVideo: TFilename);
 
 var
   FFMpeg: TProcessCreator;
@@ -926,7 +925,9 @@ var
 
     procedure AddOut;
     begin
-      FilterConcat := FilterConcat + Format('[%s][%s]', [VOut, AOut]);
+      FilterConcat := FilterConcat + Format('[%s]', [AOut]);
+
+//      FilterConcat := FilterConcat + Format('[%s][%s]', [VOut, AOut]);
       Inc(OutNo);
     end;
 
@@ -988,6 +989,10 @@ var
     FilterConcat := FilterConcat + Format('concat=n=%d:v=1:a=1[v][a]', [OutNo]);
 
     OutputTemp := ChangeFileExt(OutputVideo,  '.tmp' + ExtractFileExt(OutputVideo));
+
+    FilterVideosScale.clear;
+    FilterVideosTrim.clear;
+
     FFMpeg.Parameters := Format(FParams[ptFFMpegFilterComplex],
       [FilterInput.Text, FilterVideosScale.Text + FilterVideosTrim.Text + FilterAudios.Text  + FilterConcat, OutputTemp]);
 
@@ -1085,12 +1090,12 @@ begin
   end;
 end;
 
-procedure TYtMultiCut.SetDestinationDir(const Value: string);
+procedure TYtBatchCutter.SetDestinationDir(const Value: string);
 begin
   FDestinationDir := PathAddSeparator(Value);
 end;
 
-procedure TYtMultiCut.ShowReadmeText;
+procedure TYtBatchCutter.ShowReadmeText;
 var
   ResStream: TResourceStream;
   Text: IJclStringList;
@@ -1123,7 +1128,7 @@ end;
 
 procedure Run;
 var
-  Cutter: TYtMultiCut;
+  Cutter: TYtBatchCutter;
   InputFile: TFilename;
   InputLines: IJclStringList;
 begin
@@ -1131,7 +1136,7 @@ begin
   FmtDotDecimalSeparator.DecimalSeparator := '.';
 
   try
-    Cutter := TYtMultiCut.Create;
+    Cutter := TYtBatchCutter.Create;
     try
       if ParamCount = 0 then
       begin

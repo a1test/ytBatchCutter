@@ -1,4 +1,4 @@
-﻿program ytMultiCut;
+﻿program ytBatchCutter;
 
 {$APPTYPE CONSOLE}
 {$WARN SYMBOL_PLATFORM OFF}
@@ -6,7 +6,7 @@
 {$R *.dres}
 
 uses
-  uYtMulticut in 'source\uYtMulticut.pas';
+  uYtBatchCutter in 'source\uYtBatchCutter.pas';
 
 begin
 { TODO : Add ability to repeatedly insert parts of the same file }
