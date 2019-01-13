@@ -89,6 +89,9 @@ type
       'FFMpeg', 'Concatenating', 'Trimming', 'Output',
       'Getting durations', 'Total duration', 'Use concat demuxer', 'Video format',
       'Different scale');
+
+      { TODO : add parameter description and display it on ShowReadmeText }
+
     OutputParams: set of TParamType = [ptTotalDuration];
 
     procedure SetDestinationDir(const Value: string);
@@ -99,7 +102,6 @@ type
     FIgnoreErrors: array [TParamType] of Boolean;
     FHasErrors: Boolean;
     function GetDownloadsDir: string;
-    function GetConcatVidsDir: string;
     procedure ParseVideoList(Lines: IJclStringList);
     procedure ReadConfigParams(Lines: IJclStringList);
     function WarnIfEmptyParam(Param: TParamType): Boolean;
@@ -778,11 +780,6 @@ Writing video length failed: can't find video with url "" . Continue? [y/n] }
 
 end;
 
-function TYtBatchCutter.GetConcatVidsDir: string;
-begin
-  Result := PathAddSeparator(FDestinationDir + '_concatenated');
-end;
-
 procedure TYtBatchCutter.LoadInputData(InputData: IJclStringList);
 begin
   ReadConfigParams(InputData);
@@ -952,7 +949,6 @@ var
     FilterVideosScale.Add('');
     OutNo := 0;
 
-    TDirectory.CreateDirectory(GetConcatVidsDir);
     InputFileNo := -1;
     for V in Videos do
     begin
@@ -1016,7 +1012,7 @@ var
       FFMpeg.Parameters := Format(FParams[ptFFMpegConcat], [OutputVideo]);
       ExecuteAndWait(FFMpeg, ptFFMpegConcat);
     finally
-      //TFile.Delete(GetConcatVidsDir + CONCAT_DEMUXER_FILE);
+      //TFile.Delete(FFMpeg.CurrentDirectory + CONCAT_DEMUXER_FILE);
     end;
   end;
 
