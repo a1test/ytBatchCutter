@@ -111,7 +111,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    procedure DownloadVideos;
+    function DownloadVideos: Boolean;
     procedure FindDownloadedVideos;
     function IsParamEnabled(Param: TParamType): Boolean;
     procedure GetAndWriteVideoDurations(InputData: IJclStringList);
@@ -484,11 +484,11 @@ end;
 
 procedure TYtMultiCut.FindDownloadedVideos;
 var
-  V, V2: TVideoFileInfo;
+  V: TVideoFileInfo;
   Files: IJclStringList;
   S: string;
 begin
-  Writeln('Finding downloaded files...');
+  //Writeln('Finding downloaded files...');
 
   for V in FVideos do
   begin
@@ -509,9 +509,9 @@ begin
       if not MatchText(ExtractFileExt(S), ['.txt', '.part']) then
       begin
 
-        for V2 in FVideos do
-          if V2.OriginalFile = S then
-            AskContinue('More 1 videos has same ID = ' + V2.VideoID, []);
+//        for V2 in FVideos do
+//          if V2.OriginalFile = S then
+//            AskContinue('More 1 videos has same ID = ' + V2.VideoID, []);
 
 
         V.OriginalFile := S;
@@ -528,11 +528,13 @@ begin
 
 end;
 
-procedure TYtMultiCut.DownloadVideos;
+function TYtMultiCut.DownloadVideos: Boolean;
 var
   V: TVideoFileInfo;
   YoutubeDLProcess: TProcessCreator;
+  Urls: string;
 begin
+  Result := False;
   if WarnIfEmptyParam(ptYoutubeDLDownload) then
     Exit;
 
@@ -541,9 +543,14 @@ begin
     // first parameter in CreateProcess must specify full path to exe if not empty
     YoutubeDLProcess.ApplicationName := '';
     YoutubeDLProcess.AdjustCmdLine := False;
-    YoutubeDLProcess.Parameters := FParams[ptYoutubeDLDownload];
     for V in FVideos do
-      YoutubeDLProcess.Parameters := YoutubeDLProcess.Parameters + ' ' + V.Url;
+      if V.OriginalFile = '' then
+        Urls := Urls + ' ' + V.Url;
+    if Urls.IsEmpty then
+      Exit;
+
+    YoutubeDLProcess.Parameters := FParams[ptYoutubeDLDownload] + Urls;
+
     TDirectory.CreateDirectory(GetDownloadsDir);
     YoutubeDLProcess.CurrentDirectory := GetDownloadsDir;
     // YoutubeDLProcess.CreationFlags := CREATE_NEW_CONSOLE;
@@ -551,6 +558,10 @@ begin
   finally
     FreeAndNil(YoutubeDLProcess);
   end;
+
+  Writeln('Done');
+
+  Result := True;
 
 end;
 
@@ -574,7 +585,7 @@ var
     begin
       Value := FParams[Param];
     end;
-
+            ////
     for P := Low(TParamType) to High(TParamType) do
       if Value.Contains(ParamVarTemplate(P)) then
         Value := Value.Replace(ParamVarTemplate(P), FParams[P]);
@@ -583,7 +594,7 @@ var
   end;
 
 var
-  P, P2: TParamType;
+  P: TParamType;
 begin
   ChangedParams := [];
 
@@ -750,11 +761,6 @@ procedure TYtMultiCut.GetAndWriteVideoDurations(InputData: IJclStringList);
 
   end;
 
-var
-  I: Integer;
-  Part: TVideoPart;
-  V: TVideoFileInfo;
-  PartDuration: TDateTime;
 begin
 { TODO :
 Getting this error if url is local file path:
@@ -931,6 +937,7 @@ var
     Trim: string;
     V: TVideoFileInfo;
     PrevTime: TDateTime;
+    OutputTemp: string;
   begin
     if  WarnIfEmptyParam(ptFFMpegFilterComplex) then
       Exit;
@@ -979,9 +986,17 @@ var
     end;
 
     FilterConcat := FilterConcat + Format('concat=n=%d:v=1:a=1[v][a]', [OutNo]);
+
+    OutputTemp := ChangeFileExt(OutputVideo,  '.tmp' + ExtractFileExt(OutputVideo));
     FFMpeg.Parameters := Format(FParams[ptFFMpegFilterComplex],
-      [FilterInput.Text, FilterVideosScale.Text + FilterVideosTrim.Text + FilterAudios.Text  + FilterConcat, OutputVideo]);
-    ExecuteAndWait(FFMpeg, ptFFMpegFilterComplex)
+      [FilterInput.Text, FilterVideosScale.Text + FilterVideosTrim.Text + FilterAudios.Text  + FilterConcat, OutputTemp]);
+
+    if TFile.Exists(OutputVideo) then
+      TFile.Delete(OutputVideo);
+    RenameFile(OutputTemp, OutputVideo);
+
+    ExecuteAndWait(FFMpeg, ptFFMpegFilterComplex);
+
 
   end;
 
@@ -1020,7 +1035,6 @@ var
   V: TVideoFileInfo;
   HasCutting: Boolean;
   DownloadsDirName: string;
-  I: Integer;
 begin
   Writeln('');
   Writeln('Start trimming');
@@ -1148,10 +1162,10 @@ begin
       if InputLines.Text.Trim <> TFile.ReadAllText(InputFile).Trim then
         InputLines.SaveToFile(InputFile);
 
-      { TODO : Don't ask }
-      if not AskConfirmation('Skip downloading?') then
-        Cutter.DownloadVideos;
       Cutter.FindDownloadedVideos;
+      if Cutter.DownloadVideos then
+        Cutter.FindDownloadedVideos;
+
       if Cutter.FVideos.Count = 0 then
         raise Exception.Create('Null video count');
 
