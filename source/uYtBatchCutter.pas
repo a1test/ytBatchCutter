@@ -72,18 +72,15 @@ type
 
     YoutubeDL = 'youtube-dl';
     YoutubeDLExe = YoutubeDL + '.exe';
-    FFMpeg = 'ffmpeg';
-    FFMpegExe = FFMpeg + '.exe';
 
-    CONCAT_DEMUXER_FILE = 'concat.txt';
     LENGTH_PARAM = '        length = ';
 
     DEFAULT_VIDEO_FORMAT = 'mp4';
     DEFAULT_USE_CONCAT_DEMUXER = False;
     DEFAULT_DIFFERENT_SCALE = False;
 
-    ParamNames: array [TParamType] of string = (YoutubeDL, YoutubeDL + '-download', FFMpeg,
-    FFMpeg + '-concat', FFMpeg + '-filter', 'output',
+    ParamNames: array [TParamType] of string = (YoutubeDL, YoutubeDL + '-download', 'ffmpeg',
+    'ffmpeg-concat', 'ffmpeg-filter', 'output',
       'get-length', 'use-concat-demuxer', 'format', 'different-scale');
     ParamActions: array [TParamType] of string = ('', 'Downloading',
       '', 'Concatenating', 'Trimming', 'Output',
@@ -95,28 +92,24 @@ type
     ParamHints: array [TParamType] of string = (
       YoutubeDL + ' path',
       YoutubeDL + ' downloading command line',
-      FFMpeg + ' path',
-      FFMpeg + ' concat demuxer command line',
-      FFMpeg + ' filter-complex trimming command line',
-      'output file name',
+      'ffmpeg path',
+      'ffmpeg concat demuxer command line',
+      'ffmpeg filter-complex trimming command line',
+      'Output file name',
       YoutubeDL + ' getting video duration command line',
-      'use concat demuxer',
-      'video format',
-      'set if input videos has different scale');
+      'Use concat demuxer. Faster but less stable way. Only affects when cutting is not used. ',
+      'Video format',
+      'Set if input videos has different scale');
 
     procedure SetDestinationDir(const Value: string);
 
   var
     FVideos: TObjectList<TVideoFileInfo>;
     FDestinationDir: string;
-    FIgnoreErrors: array [TParamType] of Boolean;
-    FHasErrors: Boolean;
     function GetDownloadsDir: string;
     procedure ParseVideoList(Lines: IJclStringList);
     procedure ReadConfigParams(Lines: IJclStringList);
     function WarnIfEmptyParam(Param: TParamType): Boolean;
-    procedure AskIgnoreErrors(Param: TParamType);
-    procedure ExecuteAndWait(ProcessCreator: TProcessCreator; Action: TParamType);
     function ParamVarTemplate(Param: TParamType): string;
     function GetVideoExt: string;
   public
@@ -131,9 +124,38 @@ type
     procedure ShowReadmeText;
     property DestinationDir: string read FDestinationDir
       write SetDestinationDir;
-    property HasErrors: Boolean read FHasErrors;
   end;
 
+  TConsoleHelper = class
+   private
+    class var FIgnoreErrors: array [TParamType] of Boolean;
+   public
+    class procedure AskIgnoreErrors(Param: TParamType);
+  end;
+
+  TProcessExecutor = class
+
+  end;
+
+
+  TFFMpeg = class (TProcessExecutor)
+  private
+    FProcess: TProcessCreator;
+    FOutputvideo: TFilename;
+    procedure SetOutputVideo(const Value: TFilename);
+  public const
+    Exe = 'ffmpeg.exe';
+    CONCAT_DEMUXER_FILE = 'concat.txt';
+  public
+    constructor Create(const DestinationDir: string);
+    destructor Destroy; override;
+    function KillProcess: Boolean;
+    procedure Concat(InputVideosDemuxer: IJclStringList);
+    procedure TrimViaFilterComplex(Videos: array of TVideoFileInfo;
+      DifferentScale: Boolean);
+    property Process: TProcessCreator read FProcess;
+    property OutputVideo: TFilename read FOutputvideo write SetOutputVideo;
+  end;
 
 implementation
 
@@ -264,6 +286,30 @@ begin
   end;
 
   Exit(True);
+
+end;
+
+
+procedure ExecuteAndWait(ProcessCreator: TProcessCreator;
+  Action: TParamType);
+begin
+  Writeln(ProcessCreator.Parameters);
+  Writeln('');
+  ProcessCreator.Parameters := ProcessCreator.Parameters.Replace(sLineBreak, '');
+  ProcessCreator.Execute;
+  if ProcessCreator.WaitFor = 0 then
+    Exit;
+
+
+  case Action of
+    ptYoutubeDLGetDuration:
+      TConsoleHelper.AskIgnoreErrors(Action);
+    ptYoutubeDLDownload:
+      AskContinue;
+  else
+    AskContinue;
+  end;
+
 
 end;
 
@@ -428,47 +474,6 @@ end;
 
 { TYtBatchCutter }
 
-procedure TYtBatchCutter.AskIgnoreErrors(Param: TParamType);
-var
-  PT: TParamType;
-begin
-  if FIgnoreErrors[Param] then
-    Exit;
-
-  Writeln('Ignore such warnings? [y/n/a] Type "a" to ignore all type of warnings');
-  case ReadChar(['y', 'n', 'a']) of
-    'y':
-      FIgnoreErrors[Param] := True;
-    'a':
-      for PT := Low(TParamType) to High(TParamType) do
-        FIgnoreErrors[PT] := True
-  end;
-end;
-
-procedure TYtBatchCutter.ExecuteAndWait(ProcessCreator: TProcessCreator;
-  Action: TParamType);
-begin
-  Writeln(ProcessCreator.Parameters);
-  Writeln('');
-  ProcessCreator.Parameters := ProcessCreator.Parameters.Replace(sLineBreak, '');
-  ProcessCreator.Execute;
-  if ProcessCreator.WaitFor = 0 then
-    Exit;
-
-  FHasErrors := True;
-
-  case Action of
-    ptYoutubeDLGetDuration:
-      AskIgnoreErrors(Action);
-    ptYoutubeDLDownload:
-      AskContinue;
-  else
-    AskContinue;
-  end;
-
-
-end;
-
 constructor TYtBatchCutter.Create;
 begin
   inherited Create;
@@ -476,9 +481,9 @@ begin
   FParams[ptYoutubeDL] := YoutubeDLExe;
   FParams[ptYoutubeDLDownload] := ParamVarTemplate(ptYoutubeDL) + ' -f best';
   FParams[ptYoutubeDLGetDuration] := 'cmd /c ' + ParamVarTemplate(ptYoutubeDL) + ' %s --get-duration > %s';
-  FParams[ptFFMpeg] := FFmpegExe + ' -hide_banner -loglevel info';
+  FParams[ptFFMpeg] := TFFmpeg.Exe + ' -hide_banner -loglevel info';
   FParams[ptFFMpegConcat] := ParamVarTemplate(ptFFMpeg) + '  -f concat -safe 0 -i ' +
-    CONCAT_DEMUXER_FILE + ' -c copy "%s" -y';
+    TFFMpeg.CONCAT_DEMUXER_FILE + ' -c copy "%s" -y';
   FParams[ptVideoFormat] := DEFAULT_VIDEO_FORMAT;
   FParams[ptUseConcatDemuxer] := Integer(DEFAULT_USE_CONCAT_DEMUXER).ToString;
   FParams[ptDifferentScale] := Integer(DEFAULT_DIFFERENT_SCALE).ToString;
@@ -890,169 +895,16 @@ begin
 end;
 
 procedure TYtBatchCutter.TrimVideos(OutputVideo: TFilename);
-
-var
-  FFMpeg: TProcessCreator;
-  NewFilesDemuxer: IJclStringList;
-
-  procedure TrimViaFilterComplex(Videos: array of TVideoFileInfo; OutputVideo: TFilename);
-  var
-    FilterInput: IJclStringList;
-    FilterVideosScale, FilterVideosTrim: IJclStringList;
-    FilterAudios: IJclStringList;
-    FilterConcat: string;
-    InputFileNo: Integer;
-    OutNo: Integer;
-    AIn, AOut, VIn, VOut: string;
-
-    procedure AddInput(Video: TVideoFileInfo);
-    var
-      VStreamSource: string;
-    begin
-      FilterInput.GetStringsRef.AddFmt('-i "%s" ', [Video.OriginalFile]);
-      Inc(InputFileNo);
-
-      AIn := InputFileNo.ToString + ':' + 'a'; // [0:a]
-      VIn := Format('%dv', [InputFileNo]); //[0v]
-      VStreamSource := InputFileNo.ToString + ':' + 'v'; // [0:v]
-      AOut := AIn;
-      VOut := VIn;
-      if InputFileNo = 0 then
-        // using setsar in case of some videos with SAR = 0:1 (!) with which scale2ref is useless
-        FilterVideosScale.GetStringsRef.AddFmt('[%s]setsar=1[%s]; ', [VStreamSource, VIn])
-      else
-      begin
-        FilterVideosScale.GetStringsRef.AddFmt('[%s][0v]scale2ref[s%s][0v]; ', [VStreamSource, VIn]);
-        VStreamSource := VIn;
-        FilterVideosScale.GetStringsRef.AddFmt('[s%s]setsar=1[%s]; ', [VStreamSource, VIn]);
-      end;
-    end;
-
-    procedure AddOut;
-    begin
-      FilterConcat := FilterConcat + Format('[%s]', [AOut]);
-
-//      FilterConcat := FilterConcat + Format('[%s][%s]', [VOut, AOut]);
-      Inc(OutNo);
-    end;
-
-  const
-    SET_PTS = 'setpts=PTS-STARTPTS';
-  var
-    T: TVideoPart;
-    Trim: string;
-    V: TVideoFileInfo;
-    PrevTime: TDateTime;
-    OutputTemp: string;
-  begin
-    if  WarnIfEmptyParam(ptFFMpegFilterComplex) then
-      Exit;
-
-    FilterInput := JclStringList;
-
-    FilterVideosScale := JclStringList;
-    FilterVideosTrim := JclStringList;
-    FilterAudios := JclStringList;
-
-    FilterVideosScale.Add('');
-    OutNo := 0;
-
-    InputFileNo := -1;
-    for V in Videos do
-    begin
-
-      AddInput(V);
-
-      PrevTime := 0;
-      if V.Parts.Count = 0 then
-        AddOut
-      else
-        for T in V.Parts do
-        begin
-          // need to add new input for each video part if videos are different scaled
-          // or if parts are not in chronological order
-          // otherwise it leads to Buffer queue overflow, dropping
-          if (IsParamEnabled(ptDifferentScale) and (PrevTime <> 0))
-            or (T.InPointTime < PrevTime) then
-              AddInput(V);
-
-          Trim := T.InPoint.Replace(':', '\:').QuotedString + ':' + T.OutPoint.Replace(':', '\:').QuotedString;
-
-          VOut := Format('%dv%d', [InputFileNo, OutNo]); //[v0-0]
-          AOut := Format('%da%d', [InputFileNo, OutNo]); //[v0-0]
-          FilterVideosTrim.GetStringsRef.AddFmt('[%s]trim=%s,%s[%s]; ', [VIn, Trim, SET_PTS, VOut]);
-          FilterAudios.GetStringsRef.AddFmt('[%s]atrim=%s,a%s[%s]; ', [AIn, Trim, SET_PTS, AOut]);
-
-          PrevTime := T.InPointTime; // or OutPoint ? Check
-
-          AddOut;
-        end;
-
-    end;
-
-    FilterConcat := FilterConcat + Format('concat=n=%d:v=1:a=1[v][a]', [OutNo]);
-
-    OutputTemp := ChangeFileExt(OutputVideo,  '.tmp' + ExtractFileExt(OutputVideo));
-
-    FilterVideosScale.clear;
-    FilterVideosTrim.clear;
-
-    FFMpeg.Parameters := Format(FParams[ptFFMpegFilterComplex],
-      [FilterInput.Text, FilterVideosScale.Text + FilterVideosTrim.Text + FilterAudios.Text  + FilterConcat, OutputTemp]);
-
-    if TFile.Exists(OutputVideo) then
-      TFile.Delete(OutputVideo);
-    RenameFile(OutputTemp, OutputVideo);
-
-    ExecuteAndWait(FFMpeg, ptFFMpegFilterComplex);
-
-
-  end;
-
-  procedure ConcatAllVideos(OutputVideo: TFilename);
-  begin
-    if WarnIfEmptyParam(ptFFMpegConcat) then
-      Exit;
-    Writeln('');
-    Writeln(ParamActions[ptFFMpegConcat]);
-    NewFilesDemuxer.SaveToFile(FFMpeg.CurrentDirectory + CONCAT_DEMUXER_FILE);
-    try
-      FFMpeg.Parameters := Format(FParams[ptFFMpegConcat], [OutputVideo]);
-      ExecuteAndWait(FFMpeg, ptFFMpegConcat);
-    finally
-      //TFile.Delete(FFMpeg.CurrentDirectory + CONCAT_DEMUXER_FILE);
-    end;
-  end;
-
-  procedure KillFFMpeg;
-  const
-    KillFFMpegTimeout = 2000;
-    KillFFMpegWaitAfter = 500;
-  var
-    PID: THandle;
-  begin
-    PID := GetPidFromProcessName(FFMpegExe);
-    if PID <> INVALID_HANDLE_VALUE then
-    begin
-      WritelnFmt('Terminating "%s"...', [FFMpegExe]);
-      if TerminateApp(PID, KillFFMpegTimeout) = taKill  then
-        Sleep(KillFFMpegWaitAfter);
-    end;
-  end;
-
 var
   V: TVideoFileInfo;
   HasCutting: Boolean;
   DownloadsDirName: string;
+  FFMpeg: TFFMpeg;
+  InputVideosDemuxer: IJclStringList;
 begin
   Writeln('');
   Writeln('Start trimming');
 
-  if DebugHook <> 0 then
-    KillFFMpeg;
-
-  NewFilesDemuxer := JclStringList;
-  DownloadsDirName := ExtractFileName(PathRemoveSeparator(GetDownloadsDir));
 
   HasCutting := False;
   for V in FVideos do
@@ -1062,36 +914,238 @@ begin
       Break;
     end;
 
-  FFMpeg := TProcessCreator.Create;
+
+  FFMpeg := TFFMpeg.Create(FDestinationDir);
   try
-    FFMpeg.ApplicationName := '';
-    FFMpeg.AdjustCmdLine := False;
-    //FFMpeg.CreationFlags := CREATE_NEW_CONSOLE;
-    FFMpeg.CurrentDirectory := FDestinationDir;
+    if DebugHook <> 0 then
+      FFMpeg.KillProcess;
 
-    if not FParams[ptOutput].IsEmpty then
-      OutputVideo := FParams[ptOutput];
-    if not ExtractFileExt(OutputVideo).EndsWith(GetVideoExt, True) then
-      OutputVideo := OutputVideo + GetVideoExt;
-    if TFile.Exists(FFMpeg.CurrentDirectory + OutputVideo) then
-      TFile.Delete(FFMpeg.CurrentDirectory + OutputVideo);
+      if not FParams[ptOutput].IsEmpty then
+        FFMpeg.OutputVideo := FParams[ptOutput];
+      if not ExtractFileExt(OutputVideo).EndsWith(GetVideoExt, True) then
+        FFMpeg.OutputVideo := FFMpeg.OutputVideo + GetVideoExt;
 
-    if HasCutting or not IsParamEnabled(ptUseConcatDemuxer) then
-      TrimViaFilterComplex(FVideos.ToArray, OutputVideo)
-    else
-    begin
-      for V in FVideos do
-          NewFilesDemuxer.Add('file '
+      if TFile.Exists(FFMpeg.OutputVideo) then
+        TFile.Delete(FFMpeg.OutputVideo);
+
+      if HasCutting or not IsParamEnabled(ptUseConcatDemuxer) then
+      begin
+        if not WarnIfEmptyParam(ptFFMpegFilterComplex) then
+          FFMpeg.TrimViaFilterComplex(FVideos.ToArray, IsParamEnabled(ptDifferentScale));
+      end
+      else
+      begin
+        DownloadsDirName := ExtractFileName(PathRemoveSeparator(GetDownloadsDir));
+        InputVideosDemuxer := JclStringList;
+        for V in FVideos do
+          // ToDo: check V.OriginalFile if its already include DownloadsDirName
+          // and check doublequoting
+          InputVideosDemuxer.Add('file '
             + QuotedStr(DownloadsDirName.QuotedString + PathDelim + ExtractFileName(V.OriginalFile))
           );
+        if not WarnIfEmptyParam(ptFFMpegConcat) then
+        begin
+          Writeln('');
+          Writeln(ParamActions[ptFFMpegConcat]);
+          FFMpeg.Concat(InputVideosDemuxer);
+        end;
+      end;
 
-      ConcatAllVideos(OutputVideo);
-    end;
 
-    Writeln('Done.');
   finally
     FreeAndNil(FFMpeg);
   end;
+  Writeln('Done.');
+
+end;
+
+{ TFFMpeg }
+
+procedure TFFMpeg.Concat(InputVideosDemuxer: IJclStringList);
+begin
+  InputVideosDemuxer.SaveToFile(FProcess.CurrentDirectory + CONCAT_DEMUXER_FILE);
+  try
+    FProcess.Parameters := Format(FParams[ptFFMpegConcat], [FOutputVideo]);
+    ExecuteAndWait(FProcess, ptFFMpegConcat);
+  finally
+    //TFile.Delete(FFMpeg.CurrentDirectory + CONCAT_DEMUXER_FILE);
+  end;
+
+end;
+
+constructor TFFMpeg.Create(const DestinationDir: string);
+begin
+  FProcess := TProcessCreator.Create;
+  FProcess.ApplicationName := '';
+  FProcess.AdjustCmdLine := False;
+  FProcess.CreationFlags := CREATE_NEW_CONSOLE;
+  FProcess.CurrentDirectory := DestinationDir;
+
+
+end;
+
+destructor TFFMpeg.Destroy;
+begin
+  FreeAndNil(FProcess);
+  inherited;
+end;
+
+function TFFMpeg.KillProcess: Boolean;
+const
+  KillTimeout = 2000;
+  WaitAfterKill = 500;
+var
+  PID: THandle;
+begin
+  Result := True;
+  PID := GetPidFromProcessName(Exe);
+  if PID <> INVALID_HANDLE_VALUE then
+  begin
+    WritelnFmt('Terminating "%s"...', [Exe]);
+    if TerminateApp(PID, KillTimeout) = taKill then
+      Sleep(WaitAfterKill)
+    else
+      Result := False;
+  end;
+end;
+
+procedure TFFMpeg.SetOutputVideo(const Value: TFilename);
+begin
+  if PathIsAbsolute(Value) then
+    FOutputVideo := Value
+  else
+    FOutputvideo := FProcess.CurrentDirectory + Value;
+
+end;
+
+procedure TFFMpeg.TrimViaFilterComplex(Videos: array of TVideoFileInfo;
+      DifferentScale: Boolean);
+var
+  FilterInput: IJclStringList;
+  FilterVideosScale, FilterVideosTrim: IJclStringList;
+  FilterAudios: IJclStringList;
+  FilterConcat: string;
+  InputFileNo: Integer;
+  OutNo: Integer;
+  AIn, AOut, VIn, VOut: string;
+
+  procedure AddInput(Video: TVideoFileInfo);
+  var
+    VStreamSource: string;
+  begin
+    FilterInput.GetStringsRef.AddFmt('-i "%s" ', [Video.OriginalFile]);
+    Inc(InputFileNo);
+
+    AIn := InputFileNo.ToString + ':' + 'a'; // [0:a]
+    VIn := Format('%dv', [InputFileNo]); //[0v]
+    VStreamSource := InputFileNo.ToString + ':' + 'v'; // [0:v]
+    AOut := AIn;
+    VOut := VIn;
+    if InputFileNo = 0 then
+      // using setsar in case of some videos with SAR = 0:1 (!) with which scale2ref is useless
+      FilterVideosScale.GetStringsRef.AddFmt('[%s]setsar=1[%s]; ', [VStreamSource, VIn])
+    else
+    begin
+      FilterVideosScale.GetStringsRef.AddFmt('[%s][0v]scale2ref[s%s][0v]; ', [VStreamSource, VIn]);
+      VStreamSource := VIn;
+      FilterVideosScale.GetStringsRef.AddFmt('[s%s]setsar=1[%s]; ', [VStreamSource, VIn]);
+    end;
+  end;
+
+  procedure AddOut;
+  begin
+    FilterConcat := FilterConcat + Format('[%s][%s]', [VOut, AOut]);
+    Inc(OutNo);
+  end;
+
+const
+  SET_PTS = 'setpts=PTS-STARTPTS';
+var
+  T: TVideoPart;
+  Trim: string;
+  V: TVideoFileInfo;
+  PrevTime: TDateTime;
+  OutputTemp: string;
+begin
+  FilterInput := JclStringList;
+
+  FilterVideosScale := JclStringList;
+  FilterVideosTrim := JclStringList;
+  FilterAudios := JclStringList;
+
+  FilterVideosScale.Add('');
+  OutNo := 0;
+
+  InputFileNo := -1;
+  for V in Videos do
+  begin
+
+    AddInput(V);
+
+    PrevTime := 0;
+    if V.Parts.Count = 0 then
+      AddOut
+    else
+      for T in V.Parts do
+      begin
+        // need to add new input for each video part if videos are different scaled
+        // or if parts are not in chronological order
+        // otherwise it leads to Buffer queue overflow, dropping
+        if (DifferentScale and (PrevTime <> 0))
+          or (T.InPointTime < PrevTime) then
+            AddInput(V);
+
+        Trim := T.InPoint.Replace(':', '\:').QuotedString + ':' + T.OutPoint.Replace(':', '\:').QuotedString;
+
+        VOut := Format('%dv%d', [InputFileNo, OutNo]); //[0v0]
+        AOut := Format('%da%d', [InputFileNo, OutNo]); //[0a0]
+        FilterVideosTrim.GetStringsRef.AddFmt('[%s]trim=%s,%s[%s]; ', [VIn, Trim, SET_PTS, VOut]);
+        FilterAudios.GetStringsRef.AddFmt('[%s]atrim=%s,a%s[%s]; ', [AIn, Trim, SET_PTS, AOut]);
+
+        PrevTime := T.InPointTime; // or OutPoint ? Check
+
+        AddOut;
+      end;
+
+  end;
+
+  FilterConcat := FilterConcat + Format('concat=n=%d:v=1:a=1[v][a]', [OutNo]);
+
+  OutputTemp := ChangeFileExt(FOutputVideo,  '.tmp' + ExtractFileExt(FOutputVideo));
+
+  FProcess.Parameters := Format(FParams[ptFFMpegFilterComplex],
+    [FilterInput.Text, FilterVideosScale.Text + FilterVideosTrim.Text + FilterAudios.Text  + FilterConcat, OutputTemp]);
+
+  // ToDo: check double deleting
+  if TFile.Exists(FOutputVideo) then
+    TFile.Delete(FOutputVideo);
+
+  RenameFile(OutputTemp, FOutputVideo);
+
+  ExecuteAndWait(FProcess, ptFFMpegFilterComplex);
+
+
+end;
+
+
+{ TConsoleHelper }
+
+class procedure TConsoleHelper.AskIgnoreErrors(Param: TParamType);
+var
+  PT: TParamType;
+begin
+  if FIgnoreErrors[Param] then
+    Exit;
+
+  Writeln('Ignore such warnings? [y/n/a] Type "a" to ignore all type of warnings');
+  case ReadChar(['y', 'n', 'a']) of
+    'y':
+      FIgnoreErrors[Param] := True;
+    'a':
+      for PT := Low(TParamType) to High(TParamType) do
+        FIgnoreErrors[PT] := True
+  end;
+
 end;
 
 procedure TYtBatchCutter.SetDestinationDir(const Value: string);
